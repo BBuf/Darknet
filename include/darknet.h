@@ -45,18 +45,22 @@ typedef struct{
 } tree;
 tree *read_tree(char *filename);
 
+//激活函数类型
 typedef enum{
     LOGISTIC, RELU, RELIE, LINEAR, RAMP, TANH, PLSE, LEAKY, ELU, LOGGY, STAIR, HARDTAN, LHTAN, SELU
 } ACTIVATION;
 
+//图片类型
 typedef enum{
     PNG, BMP, TGA, JPG
 } IMTYPE;
 
+//数学计算
 typedef enum{
     MULT, ADD, SUB, DIV
 } BINARY_ACTIVATION;
 
+// 定义层的名字
 typedef enum {
     CONVOLUTIONAL,
     DECONVOLUTIONAL,
@@ -90,10 +94,12 @@ typedef enum {
     BLANK
 } LAYER_TYPE;
 
+//损失函数类型
 typedef enum{
     SSE, MASKED, L1, SEG, SMOOTH,WGAN
 } COST_TYPE;
 
+//超参数类型
 typedef struct{
     int batch;
     float learning_rate;
@@ -112,13 +118,16 @@ typedef struct network network;
 struct layer;
 typedef struct layer layer;
 
+//定义layer
 struct layer{
     LAYER_TYPE type;
     ACTIVATION activation;
     COST_TYPE cost_type;
+    //cpu
     void (*forward)   (struct layer, struct network);
     void (*backward)  (struct layer, struct network);
     void (*update)    (struct layer, update_args);
+    //gpu
     void (*forward_gpu)   (struct layer, struct network);
     void (*backward_gpu)  (struct layer, struct network);
     void (*update_gpu)    (struct layer, update_args);
@@ -422,11 +431,11 @@ struct layer{
 };
 
 void free_layer(layer);
-
+//定义学习率类型
 typedef enum {
     CONSTANT, STEP, EXP, POLY, STEPS, SIG, RANDOM
 } learning_rate_policy;
-
+//定义network结构
 typedef struct network{
     int n;
     int batch;
@@ -504,14 +513,14 @@ typedef struct {
     float dy;
     float aspect;
 } augment_args;
-
+//图片
 typedef struct {
     int w;
     int h;
     int c;
     float *data;
 } image;
-
+//box
 typedef struct{
     float x, y, w, h;
 } box;
@@ -588,13 +597,14 @@ network *load_network(char *cfg, char *weights, int clear);
 load_args get_base_args(network *net);
 
 void free_data(data d);
-
+//链表上的节点
 typedef struct node{
     void *val;
     struct node *next;
     struct node *prev;
 } node;
 
+//双向链表
 typedef struct list{
     int size;
     node *front;

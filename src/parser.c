@@ -741,11 +741,21 @@ int is_network(section *s)
 
 network *parse_network_cfg(char *filename)
 {
+    // 从神经网络结构参数文件中读入所有神经网络层的结构参数，存储到sections中，
+    // sections的每个node包含一层神经网络的所有结构参数
     list *sections = read_cfg(filename);
+    // 获取sections的第一个节点，可以查看一下cfg/***.cfg文件，其实第一块参数（以[net]开头）不是某层神经网络的参数，
+    // 而是关于整个网络的一些通用参数，比如学习率，衰减率，输入图像宽高，batch大小等，
+    // 具体的关于某个网络层的参数是从第二块开始的，如[convolutional],[maxpool]...，
+    // 这些层并没有编号，只说明了层的属性，但层的参数都是按顺序在文件中排好的，读入时，
+    // sections链表上的顺序就是文件中的排列顺序。
     node *n = sections->front;
     if(!n) error("Config file has no sections");
+    // 创建网络结构并动态分配内存：输入网络层数为sections->size - 1，sections的第一段不是网络层，而是通用网络参数
     network *net = make_network(sections->size - 1);
+    //设置网络所用gpu的编号(gpu_index在cuda.c中用extern声明)
     net->gpu_index = gpu_index;
+    //size_params结构体元素不含指针变量
     size_params params;
 
     section *s = (section *)n->val;
@@ -765,6 +775,7 @@ network *parse_network_cfg(char *filename)
     n = n->next;
     int count = 0;
     free_section(s);
+    //输出结果提示
     fprintf(stderr, "layer     filters    size              input                output\n");
     while(n){
         params.index = count;
@@ -827,6 +838,7 @@ network *parse_network_cfg(char *filename)
         }else if(lt == SHORTCUT){
             l = parse_shortcut(options, params, net);
         }else if(lt == DROPOUT){
+            //dropout层有点特殊，
             l = parse_dropout(options, params);
             l.output = net->layers[count-1].output;
             l.delta = net->layers[count-1].delta;
@@ -853,6 +865,7 @@ network *parse_network_cfg(char *filename)
         free_section(s);
         n = n->next;
         ++count;
+        // 构建每一层之后，如果之后还有层，则更新params.h,params.w,params.c及params.inputs为上一层相应的输出参数
         if(n){
             params.h = l.out_h;
             params.w = l.out_w;
@@ -1161,6 +1174,7 @@ void load_convolutional_weights_binary(layer l, FILE *fp)
 #endif
 }
 
+//卷积层权重加载
 void load_convolutional_weights(layer l, FILE *fp)
 {
     if(l.binary){
@@ -1168,8 +1182,10 @@ void load_convolutional_weights(layer l, FILE *fp)
         //return;
     }
     if(l.numload) l.n = l.numload;
+    //卷积层的参数个数，卷积核个数×通道数×卷积核长度×卷积核宽度/分组数(对于组卷积)
     int num = l.c/l.groups*l.n*l.size*l.size;
     fread(l.biases, sizeof(float), l.n, fp);
+    //如果使用了BN层，那就加载3个参数
     if (l.batch_normalize && (!l.dontloadscales)){
         fread(l.scales, sizeof(float), l.n, fp);
         fread(l.rolling_mean, sizeof(float), l.n, fp);
@@ -1201,8 +1217,10 @@ void load_convolutional_weights(layer l, FILE *fp)
             printf("\n");
         }
     }
+    //weights是一个float的数组，存储权重
     fread(l.weights, sizeof(float), num, fp);
     //if(l.c == 3) scal_cpu(num, 1./256, l.weights, 1);
+    //是否需要把matrix的维度进行转换，类似于permute
     if (l.flipped) {
         transpose_matrix(l.weights, l.c*l.size*l.size, l.n);
     }
@@ -1214,7 +1232,7 @@ void load_convolutional_weights(layer l, FILE *fp)
 #endif
 }
 
-
+//加载权重函数
 void load_weights_upto(network *net, char *filename, int start, int cutoff)
 {
 #ifdef GPU
@@ -1223,6 +1241,7 @@ void load_weights_upto(network *net, char *filename, int start, int cutoff)
     }
 #endif
     fprintf(stderr, "Loading weights from %s...", filename);
+    //fflush()函数冲洗流中的信息，该函数通常用于处理磁盘文件。
     fflush(stdout);
     FILE *fp = fopen(filename, "rb");
     if(!fp) file_error(filename);
@@ -1230,6 +1249,11 @@ void load_weights_upto(network *net, char *filename, int start, int cutoff)
     int major;
     int minor;
     int revision;
+    /*
+    size_t fread ( void *buffer, size_t size, size_t count, FILE *stream)
+    fread是一个函数。从一个文件流中读数据，最多读取count个项，每个项size个字节，如果调用成功返回实
+    际读取到的项个数（小于或等于count），如果不成功或读到文件末尾返回0。
+    */
     fread(&major, sizeof(int), 1, fp);
     fread(&minor, sizeof(int), 1, fp);
     fread(&revision, sizeof(int), 1, fp);
@@ -1243,7 +1267,9 @@ void load_weights_upto(network *net, char *filename, int start, int cutoff)
     int transpose = (major > 1000) || (minor > 1000);
 
     int i;
+    //cutoff 代表,cutoff之后的网络层参数不家宅，finetune的时候用
     for(i = start; i < net->n && i < cutoff; ++i){
+        //读取各层权重
         layer l = net->layers[i];
         if (l.dontload) continue;
         if(l.type == CONVOLUTIONAL || l.type == DECONVOLUTIONAL){
@@ -1307,6 +1333,7 @@ void load_weights_upto(network *net, char *filename, int start, int cutoff)
 
 void load_weights(network *net, char *filename)
 {
+    //调用load_weights_upto(net, filename, net->n)函数
     load_weights_upto(net, filename, 0, net->n);
 }
 
