@@ -175,7 +175,11 @@ char *find_char_arg(int argc, char **argv, char *arg, char *def)
     return def;
 }
 
-
+/*
+用于从文件全路径字符串中提取出主要信息，比如从cfg.yolo.cfg中提取出yolo
+函数中主要用到strchr()函数定位'/'以及'.'符号
+返回：c风格字符串，为从输入cfgfile中的深拷贝部分字符串（主要信息）（输出与输入字符串指向不同的地址，二者复制之后不再有关联）
+*/
 char *basecfg(char *cfgfile)
 {
     char *c = cfgfile;

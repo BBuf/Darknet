@@ -422,6 +422,7 @@ int main(int argc, char **argv)
     if (0 == strcmp(argv[1], "average")){
         average(argc, argv);
     } else if (0 == strcmp(argv[1], "yolo")){
+        //训练的参数为yolo，跳到训练run_yolo
         run_yolo(argc, argv);
     } else if (0 == strcmp(argv[1], "super")){
         run_super(argc, argv);
