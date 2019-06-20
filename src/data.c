@@ -9,12 +9,21 @@
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/*
+**  从文件filename中读取数据信息（不是具体的图像数据，只是关于数据的相关信息），存至链表返回：依次调用fgetl()->list_insert()函数
+**  输入： filename    文件名称
+**  输出： list指针，包含从文件中读取的信息
+**  调用： 比如在data.c->get_labels()调用，目的是为了从data/**.names文件中，读取所有物体类别的名称/标签信息；
+**        在train_detector()中调用，目的是从train.txt（该文件的生成参考Yolo官网）中读入所有训练图片的路径（文件中每一行就是一张图片的全路径）
+*/
+
 list *get_paths(char *filename)
 {
     char *path;
     FILE *file = fopen(filename, "r");
     if(!file) file_error(filename);
     list *lines = make_list();
+    //fgetl读入一整行到path，并将其插入到列表lines中
     while((path=fgetl(file))){
         list_insert(lines, path);
     }
@@ -39,12 +48,21 @@ char **get_random_paths_indexes(char **paths, int n, int m, int *indexes)
 }
 */
 
+/*
+** 从paths中读取n条路径信息：paths包含所有训练图片的路径，二维数组，每行对应一张图片的路径，
+** m为paths的行数，即为训练图片总数
+** 返回一个二维数组（矩阵），每行代表一张图片的路径，共n行
+*/
+
 char **get_random_paths(char **paths, int n, int m)
 {
     char **random_paths = calloc(n, sizeof(char*));
     int i;
+    // paths这个变量可能会被不同线程访问（读取数据本来就是多线程的），所以访问之前，先锁住，结束后解锁
     pthread_mutex_lock(&mutex);
     for(i = 0; i < n; ++i){
+        //随机产生索引：随机读入图片路径，随意读取图片的目的：举个例子：一般的训练集都是猫的图片在一起，
+		//狗的图片在一起，如果不随机读取，就是一个或者几个batch都是猫或者狗，容易过拟合同时泛化能力也差
         int index = rand()%m;
         random_paths[i] = paths[index];
         //if(i == 0) printf("%s\n", paths[index]);
@@ -135,7 +153,14 @@ matrix load_image_augment_paths(char **paths, int n, int min, int max, int size,
     return X;
 }
 
-
+/*
+** 读入一张图片的所有box：一张图片可能有多个物体，每个物体都有一个矩形框框起来（物体检测不单识别类别，更包括定位），
+** 本函数就是读入一张图片的所有box信息。每个box包括5条信息，依次为：物体类别id，矩形中心点x坐标，矩形中心点y坐标，
+** 矩形框宽度w,矩形框高度h。
+** 输入： filename    标签数据所在路径（标签数据需要下载，然后调用voc_label.py生成指定的格式，具体路径视情况而定，详见darknet/yolo网页）
+**       n           该图片中的物体个数，也就是读到的矩形框个数（也是一个返回值）
+** 返回： box_label*，包含这张图片中所有的box标签信息
+*/
 box_label *read_boxes(char *filename, int *n)
 {
     FILE *file = fopen(filename, "r");
@@ -144,8 +169,11 @@ box_label *read_boxes(char *filename, int *n)
     int id;
     int count = 0;
     int size = 64;
+    //新建一个标签数据box，并动态分配内存（之后，如果检测到多个矩形框标签数据，则利用realloc函数重新分配内存）
     box_label *boxes = calloc(size, sizeof(box_label));
+    // 读入一行数据：图片检测数据文件中一行包含了一个box的信息，依次为id,x,y,w,h
     while(fscanf(file, "%d %f %f %f %f", &id, &x, &y, &w, &h) == 5){
+        //根据box个数重新分配内存:分配count+1个box_label的内存
         if(count == size) {
             size = size * 2;
             boxes = realloc(boxes, size*sizeof(box_label));
@@ -155,6 +183,7 @@ box_label *read_boxes(char *filename, int *n)
         boxes[count].y = y;
         boxes[count].h = h;
         boxes[count].w = w;
+        //通过x,y,w,h计算矩形框4个角点的最小最大x,y坐标
         boxes[count].left   = x - w/2;
         boxes[count].right  = x + w/2;
         boxes[count].top    = y - h/2;
@@ -166,21 +195,44 @@ box_label *read_boxes(char *filename, int *n)
     return boxes;
 }
 
+//随机打乱一张照片中所有box的索引编号
 void randomize_boxes(box_label *b, int n)
 {
     int i;
     for(i = 0; i < n; ++i){
+        //通过随机交换值来打乱box在box集合中的索引编号
         box_label swap = b[i];
+        //生成0~n-1之间的索引号
         int index = rand()%n;
         b[i] = b[index];
         b[index] = swap;
     }
 }
 
+/*
+** 矫正矩形框标签数据在标准化尺寸图片中的值：输入的图片，经过place_image()函数对图片尺寸进行规范化以及数据增强后,
+** 尺寸发生了变化，由于矩形框的x,y,w,h（分别为矩形中心点坐标，矩形宽高）都是相对于原始图片宽高的比例值，所以，
+** 如果仅对原始图片进行缩放（等比例也好，不等比例也好），是不会改变x,y,w,h等值的，也就是中间图与原始图矩形框的x,y,w,h值是一样的，但关键在于，在函数place_image()中，
+** 不单涉及缩放操作，还涉及平移操作，place_image()函数的最后一步是将中间图随机的嵌入到最终输出图上，因为这一步，
+** 就彻底改变了x,y,w,h的值，为了计算新的x,y,w,h值，很简单，先按原来的值乘以中间图的宽高，得到矩形框四个角点的真实坐标，
+** 而后进行平移，统一除以最终输出图的宽高，得到新的x,y,w,h值。
+** 除此之外，左右翻转也会导致x,y,w,h值的变化。
+** 输出： boxes     一张图片中包含的所有矩形框标签数据
+**       n         一张图片中包含的矩形框个素
+**       dx        place_image()函数中，中间图相对于最终输出图canvas的起点的x坐标，用占比表示（或者说x方向上的偏移坐标），正值表示中间图嵌入到最终输出图中，负值表示输出图是中间图的一个mask
+**       dy        place_image()函数中，中间图相对于最终输出图canvas的起点的y坐标，用占比表示（或者说y方向上的偏移坐标），正值表示中间图嵌入到最终输出图中，负值表示输出图是中间图的一个mask
+**       sx        nw/w，place_image()函数中中间图宽度与最终输出图宽度的比值
+**       sy        nw/w，place_image()函数中中间图高度与最终输出图高度的比值
+**       flip      是否进行了翻转操作，在load_data_detection()中，为了进行数据增强，还可能进行了翻转操作
+*/
 void correct_boxes(box_label *boxes, int n, float dx, float dy, float sx, float sy, int flip)
 {
     int i;
+    //遍历并依次矫正每个矩形标签数据
     for(i = 0; i < n; ++i){
+        // x,y是矩形框中心点的坐标，因此，二者不可能为0（为0的话，说明矩形框宽高只能为0,相当于不存在这个矩形框或者物体），
+        // 要搞清一个概念，最初的矩形框的x,y,w,h是相对于输入的训练图片的宽高比例值，因此矩形框必须在图片内，就算有一个物体，图片没有照全，
+        // 那么给的矩形框也必须是图片内的矩形框，这时矩形框只覆盖物体的部分内容，总之不可能出现矩形框中心坐标为(0,0)（或者为负）的情况。
         if(boxes[i].x == 0 && boxes[i].y == 0) {
             boxes[i].x = 999999;
             boxes[i].y = 999999;
@@ -188,31 +240,38 @@ void correct_boxes(box_label *boxes, int n, float dx, float dy, float sx, float 
             boxes[i].h = 999999;
             continue;
         }
+        // sx = nw / w, dx = -dx / w, (boxes[i].left  * nw + dx) / w括号内为在原矩形框在中间图中真实的长度，除以w即可得新的x值，
+        // 其他几个参数也一样，思路都是先获取在中间图中的绝对坐标，然后除以最终输出图的尺寸即可得到矩形框四个角点相对输出图的坐标（占比）
+        // 此函数需要与load_data_detection()函数中调用的place_image()函数一起看。
+        // 要注意的是，这里首先获取的是在中间图中的绝对坐标，不是原始输入图的，因为place_image()函数最后一步，是将
+        // 中间图嵌入到最终输出图中，因此，已经与原始输入图没有关系了。
         boxes[i].left   = boxes[i].left  * sx - dx;
         boxes[i].right  = boxes[i].right * sx - dx;
         boxes[i].top    = boxes[i].top   * sy - dy;
         boxes[i].bottom = boxes[i].bottom* sy - dy;
-
+        // 如果load_data_detection()函数中还对最终输出图进行了左右翻转，那么相应的矩形框的位置也有改动
         if(flip){
+            // 左右翻转，就是交换一下值就可以了（因为这里都使用占比来表示坐标值，所以用1相减）
             float swap = boxes[i].left;
             boxes[i].left = 1. - boxes[i].right;
             boxes[i].right = 1. - swap;
         }
-
+        // 将矩形框的四个角点坐标严格限制在0~1之间（超出边界值的直接置为边界值）
         boxes[i].left =  constrain(0, 1, boxes[i].left);
         boxes[i].right = constrain(0, 1, boxes[i].right);
         boxes[i].top =   constrain(0, 1, boxes[i].top);
         boxes[i].bottom =   constrain(0, 1, boxes[i].bottom);
-
+        // 计算矩形框新的中心点坐标以及宽高
         boxes[i].x = (boxes[i].left+boxes[i].right)/2;
         boxes[i].y = (boxes[i].top+boxes[i].bottom)/2;
         boxes[i].w = (boxes[i].right - boxes[i].left);
         boxes[i].h = (boxes[i].bottom - boxes[i].top);
-
+        // 严格限制新的矩形框宽高在0~1之间
         boxes[i].w = constrain(0, 1, boxes[i].w);
         boxes[i].h = constrain(0, 1, boxes[i].h);
     }
 }
+
 
 void fill_truth_swag(char *path, float *truth, int classes, int flip, float dx, float dy, float sx, float sy)
 {

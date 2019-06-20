@@ -901,30 +901,59 @@ network *parse_network_cfg(char *filename)
     return net;
 }
 
+/*
+ * 读取神经网络结构配置文件（.cfg文件）中的配置数据， 将每个神经网络层参数读取到每个
+ * section 结构体 (每个 section 是 sections 的一个节点) 中， 而后全部插入到
+ * list 结构体 sections 中并返回
+ * 
+ * \param: filename    C 风格字符数组， 神经网络结构配置文件路径
+ * 
+ * \return: list 结构体指针，包含从神经网络结构配置文件中读入的所有神经网络层的参数
+ * 每个 section 的所在行的开头是 ‘[’ , ‘\0’ , ‘#’ 和 ‘;’ 符号开头的行为无效行, 除此
+ *之外的行为 section 对应的参数行. 每一行都是一个等式, 类似键值对的形式.
+
+ *可以看到, 如果某一行开头是符号 ‘[’ , 说明读到了一个新的 section: current, 然后第945行
+ *list_insert(options, current);` 将该新的 section 保存起来.
+
+ *在读取到下一个开头符号为 ‘[’ 的行之前的所有行都是该 section 的参数, 在第 957 行 
+ *read_option(line, current->options) 将读取到的参数保存在 current 变量的 options 中. 
+ *注意, 这里保存在 options 节点中的数据为 kvp 键值对类型.
+
+ *当然对于 kvp 类型的参数, 需要先将每一行中对应的键和值(用 ‘=’ 分割) 分离出来, 然后再
+ *构造一个 kvp 类型的变量作为节点元素的数据.
+
+ */
+
 list *read_cfg(char *filename)
 {
     FILE *file = fopen(filename, "r");
+    //一个section表示配置文件中的一个字段，也就是网络结构中的一层
+    //因此，一个section将读取并存储某一层的参数以及该层的type
     if(file == 0) file_error(filename);
     char *line;
-    int nu = 0;
-    list *options = make_list();
-    section *current = 0;
-    while((line=fgetl(file)) != 0){
+    int nu = 0; //当前读取行号
+    list *options = make_list(); //options包含所有的神经网络层参数
+    section *current = 0; //当前读取到某一层
+    while((line=fgetl(file)) != 0){ 
         ++ nu;
-        strip(line);
+        strip(line); //去除读入行中含有的空格符
         switch(line[0]){
+            // 以 '[' 开头的行是一个新的 section , 其内容是层的 type 
+            // 比如 [net], [maxpool], [convolutional] ...
             case '[':
                 current = malloc(sizeof(section));
                 list_insert(options, current);
                 current->options = make_list();
                 current->type = line;
                 break;
-            case '\0':
-            case '#':
-            case ';':
-                free(line);
+            case '\0': //空行
+            case '#':  //注释
+            case ';': //空行
+                free(line); // 对于上述三种情况直接释放内存即可
                 break;
             default:
+                // 剩下的才真正是网络结构的数据，调用 read_option() 函数读取
+                // 返回 0 说明文件中的数据格式有问题，将会提示错误
                 if(!read_option(line, current->options)){
                     fprintf(stderr, "Config file error line %d, could parse: %s\n", nu, line);
                     free(line);

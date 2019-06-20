@@ -232,6 +232,14 @@ activation=leaky
 
 我们来大概解释下该参数网，首先创建一个list，取名sections，记录一共有多少个section（一个section存储了CNN一层所需参数）；然后创建一个node，该node的void类型的指针指向一个新创建的section；该section的char类型指针指向.cfg文件中的某一行（line），然后将该section的list指针指向一个新创建的node，该node的void指针指向一个kvp结构体，kvp结构体中的key就是.cfg文件中的关键字（如：batch，subdivisions等），val就是对应的值；如此循环就形成了上述的参数网络图。这里copy自https://blog.csdn.net/u014540717/article/details/53193433 ，可以结合代码进行理解这个参数网。
 
+另外一种解释为：在 darknet 的网络配置文件( 以 .cfg 结尾) 中, 以 ‘[’ 开头的行被称为一个: section(段);
+
+所有的网络配置参数保存在 list 类型变量中, list 中有很多的 sections 节点, 每个 section 中又有一个保存层参数的小 list, 整体上呈现出一种大链挂小链的结构: 大链中的节点为每个 section, 各个 section 包含的参数保存在小链中, 小链的节点值的数据类型为 kvp 键值对.
+
+在数据结构中, 为了防止链表头丢失, 我们通常的做法是直接使用一个 node 指针来表示链表头. 但是在 darknet 中单独把 node 类型又进行了一次封装 - list 类型.
+
+list 中的 front 表示链表首元素, front 成员只会在空链表插入第一个元素时进行赋值, 之后每次插入都只是操作 back 成员。
+
 # 2.加载权重函数：load_weights(&net, weightfile)
 
 ```c++
@@ -398,8 +406,4 @@ void load_weights(network *net, char *filename)
     load_weights_upto(net, filename, 0, net->n);
 }
 ```
-
-
-
-# 3. 训练网络
 
