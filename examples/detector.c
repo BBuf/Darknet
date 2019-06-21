@@ -2,22 +2,41 @@
 
 static int coco_ids[] = {1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,31,32,33,34,35,36,37,38,39,40,41,42,43,44,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,67,70,72,73,74,75,76,77,78,79,80,81,82,84,85,86,87,88,89,90};
 
-
+/*
+** 图像检测网络训练函数（针对图像检测的网络训练）
+** 输入： datacfg     训练数据描述信息文件路径及名称
+**       cfgfile     神经网络结构配置文件路径及名称
+**       weightfile  预训练参数文件路径及名称
+**       gpus        GPU卡号集合（比如使用1块GPU，那么里面只含0元素，默认使用0卡号GPU；如果使用4块GPU，那么含有0,1,2,3四个元素；如果不使用GPU，那么为空指针）
+**       ngpus       使用GPUS块数，使用一块GPU和不使用GPU时，nqpus都等于1
+**       clear       
+** 说明：关于预训练参数文件weightfile，
+*/
 void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, int ngpus, int clear)
 {
+    // 读入数据配置文件信息
     list *options = read_data_cfg(datacfg);
+    // 从options找出训练图片路径信息，如果没找到，默认使用"data/train.list"路径下的图片信息（train.list含有标准的信息格式：<object-class> <x> <y> <width> <height>），
+    // 该文件可以由darknet提供的scripts/voc_label.py根据自行在网上下载的voc数据集生成，所以说是默认路径，其实也需要使用者自行调整，也可以任意命名，不一定要为train.list，
+    // 甚至可以不用voc_label.py生成，可以自己不厌其烦的制作一个（当然规模应该是很小的，不然太累了。。。）
+    // 读入后，train_images将含有训练图片中所有图片的标签以及定位信息
     char *train_images = option_find_str(options, "train", "data/train.list");
     char *backup_directory = option_find_str(options, "backup", "/backup/");
 
     srand(time(0));
+     // 提取配置文件名称中的主要信息，用于输出打印（并无实质作用），比如提取cfg/yolo.cfg中的yolo，用于下面的输出打印
     char *base = basecfg(cfgfile);
     printf("%s\n", base);
     float avg_loss = -1;
+    // 构建网络：用多少块GPU，就会构建多少个相同的网络（不使用GPU时，ngpus=1）
     network **nets = calloc(ngpus, sizeof(network));
-
+   
     srand(time(0));
+    // 随机产生种子
     int seed = rand();
     int i;
+    // for循环次数为ngpus，使用多少块GPU，就循环多少次（不使用GPU时，ngpus=1，也会循环一次）
+    // 这里每一次循环都会构建一个相同的神经网络，如果提供了初始训练参数，也会为每个网络导入相同的初始训练参数
     for(i = 0; i < ngpus; ++i){
         srand(seed);
 #ifdef GPU

@@ -630,15 +630,43 @@ image float_to_image(int w, int h, int c, float *data)
     return out;
 }
 
+/*
+** 先用双线性插值对输入图像im进行重排得到一个虚拟中间图（之所以称为虚拟，是因为这个中间图并不是一个真实存在的变量），
+** 而后将中间图嵌入到canvas中（中间图尺寸比canvas小）或者将canvas当作一个mask在im上抠图（canvas尺寸小于中间图尺寸）（canvas是帆布/画布的意思）
+** 输入： im    源图
+**       w     中间图的宽度
+**       h     中间图的高度
+**       dx    中间图插入到canvas的x方向上的偏移
+**       dy    中间图插入到canvas的y方向上的偏移
+**       canvas 目标图（在传入到本函数之前，所有像素值已经初始化为某个值，比如0.5）
+** 说明： 此函数是实现图像数据增强手段中的一种：平移（不含旋转等其他变换）。先用双线性插值将源图im重排至一个中间图，im与中间图的长宽比不一定一样，
+**      而后将中间图放入到输出图canvas中（这两者的长宽比也不一定一样），分两种情况，如果中间图的尺寸小于输出图canvas，
+**      显然，中间图是填不满canvas的，那么就将中间图随机的嵌入到canvas的某个位置（dx,dy就是起始位置，此时二者大于0,相对canvas的起始位置，这两个数是在函数外随机生成的），
+**      因为canvas已经在函数外初始化了（比如所有像素值初始化为0.5），剩下没填满的就保持为初始化值；
+**      如果canvas的尺寸小于中间图尺寸，那么就将canvas当作一个mask，在中间图上随机位置（dx,dy就是起始位置，此时二者小于0,相对中间图的起始位置）抠图。
+**      因为canvas与中间图的长宽比不一样，因此，有可能在一个方向是嵌入情况，而在另一个方向上是mask情况，总之理解就可以了。
+**      可以参考一下：
+**      https://medium.com/@vivek.yadav/dealing-with-unbalanced-data-generating-additional-data-by-jittering-the-original-image-7497fe2119c3
+**      上面网址给出了100张对原始图像进行增强之后的图片，可以看到很多图片有填满的，也有未填满的（无黑区），且位置随机。
+**      (当然，网址中给出的图片包含了多种用于图片数据增强的变换，此函数仅仅完成最简单的一种：平移)
+**
+*/
 void place_image(image im, int w, int h, int dx, int dy, image canvas)
 {
     int x, y, c;
     for(c = 0; c < im.c; ++c){
+         // 中循环和内循环的循环次数分别为中间图的行数与列数，这两个循环下来，实际可以得到中间图的所有像素值（当然，此处并没有形成一个真实的中间图变量）
         for(y = 0; y < h; ++y){
             for(x = 0; x < w; ++x){
+                // x为中间图的列坐标，x/w*im.w得到中间图对应在源图上的列坐标（按比例得到，亚像素坐标）
                 float rx = ((float)x / w) * im.w;
+                // y为中间图的行坐标，y/h*im.h得到中间图对应在源图上的行坐标（TODO:这里代码实现显然存在不足，应该放入中循环，以减小没必要的计算）
                 float ry = ((float)y / h) * im.h;
+                // 利用源图进行双线性插值得到中间图在c通道y行x列处的像素值
                 float val = bilinear_interpolate(im, rx, ry, c);
+                // 设置canvas中c通道y+dy行x+dx列的像素值为val
+                // dx,dy可大于0也可以小于0,大于0的情况很好理解，对于小于0的情况，x+dx以及y+dy会有一段小于0的，这时
+                // set_pixel()函数无作为，直到x+dx,y+dy大于0时，才有作为，这样canvas相当于起到一个mask的作用
                 set_pixel(canvas, x + dx, y + dy, c, val);
             }
         }

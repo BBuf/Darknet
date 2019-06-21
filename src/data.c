@@ -502,10 +502,36 @@ void fill_truth_mask(char *path, int num_boxes, float *truth, int classes, int w
     free_image(part);
 }
 
-
+/*
+** 用来获取一张图的真实标签信息，对于图像检测，标签信息包括物体的类别（用类别id表示）以及定位信息，定位用矩形框来表示，包含矩形中心点坐标x,y以及宽高w,h，
+** 本函数读入一张图片中所有标签信息（一张图片可能存在多个物体，每个物体都含有一条类别信息以及一个矩形框信息）
+** 输入： path     一张图片所在路径，字符数组
+**       num_boxes 每张图片允许处理的最大的矩形框数（如果图片中包含的矩形框大于num_boxes，那么不管，随机取其中num_boxes个参与训练）
+**       truth    存储一张图片包含的所有真实信息（标签信息），相当于返回值，对于检测而言，主要包括物体类别以及定位（矩形框）信息，
+**                truth是一个一维数组，每张矩形框有5条信息，因此truth中每5个数对应一个矩形框数据
+**       classes  本函数并未使用该参数
+**       flip     图片在之前读入时（比如在load_data_detection函数中）是否进行过了左右翻转
+**       dx       此参数需要参考load_data_detection函数中的注释，dx是中间图相对最终图的起点位置的x坐标除以最终图的宽度（并取负值）
+**       dy       此参数需要参考load_data_detection函数中的注释，dy是中间图相对最终图的起点位置的x坐标除以最终图的高度（并取负值）
+**       sx       此参数需要参考load_data_detection函数中的注释，sx是中间图宽度与最终图宽度的比值
+**       sy       此参数需要参考load_data_detection函数中的注释，sy是中间图高度与最终图高度的比值
+** 说明： 后面五个参数，用来矫正矩形框的信息，因为在此函数之前，对输入图片进行了缩放、平移、左右翻转一系列的数据增强操作，这些操作不会改变物体的类别信息，
+**       但会改变物体的位置信息，也即矩形框信息，需要进行矫正，这些参数的具体含义上面可能未说清，具体可参看本函数内部调用的correct_boxes()函数的用法
+*/
 void fill_truth_detection(char *path, int num_boxes, float *truth, int classes, int flip, float dx, float dy, float sx, float sy)
 {
+    // 定义一个数组，分配4096个字符（字节）内存，用以存放本图片标签信息文件所在路径
     char labelpath[4096];
+    // // 下面一连串地调用find_replace()函数，是为了得到每张训练图片的标签数据（.txt文件）所在路径
+    // 通过调用find_replace()函数，对每张图片的绝对路径进行修改，得到对应的标签数据所在路径。
+    // 比如，图片的路径为：/home/happy/Downloads/darknet_dataset/VOCdevkit/VOC2007/JPEGImages/000001.jpg，
+    // 通过连续调用find_place()函数，最终可以得到对应的标签数据路径labelpath为：
+    // /home/happy/Downloads/darknet_dataset/VOCdevkit/VOC2007/labels/000001.txt
+    // 注意，下面共调用了7次find_replace函数，可以分为两部分，第一部分是将图片的文件夹名字替换为labels，
+    // 图片的路径可能为JPEGImages,images或raw中的一种，所以调用了三次以应对多种情况，实际只有一次调用真正有效;
+    // 第二部分是将修改后缀，图片的格式有可能为jpg,png,JPG,JPEG四种中的一种，不管是哪种，
+    // 最终替换成标签数据格式，即.txt格式，因此，此处也是为了应对可能的四种情况，才四次调用了find_replace，实际起作用的只有一次调用。
+    //这里的images,JPEGImages，raw是不同的数据集中存储训练图片的文件夹
     find_replace(path, "images", "labels", labelpath);
     find_replace(labelpath, "JPEGImages", "labels", labelpath);
 
@@ -515,33 +541,40 @@ void fill_truth_detection(char *path, int num_boxes, float *truth, int classes, 
     find_replace(labelpath, ".JPG", ".txt", labelpath);
     find_replace(labelpath, ".JPEG", ".txt", labelpath);
     int count = 0;
+    //// 读入一张图片的所有box标签信息，count为读到的box个数
     box_label *boxes = read_boxes(labelpath, &count);
+    // 随机打乱一张照片中所有box的索引编号
     randomize_boxes(boxes, count);
+    //从输入的原始图片，到真正给神经网络用的图片，可能经过了平移，随机截取，左右翻转等数据增强操作，这些操作，都会改变矩形框的值，需要进行矫正
     correct_boxes(boxes, count, dx, dy, sx, sy, flip);
+    // 如果图片中含有的矩形框数多于num_boxes，则保持count = num_boxes，因为num_boxes是指定的每张图片最多参与训练的矩形框数，如果超过这个数，
+    // 就在其中随机选择num_boxes个（box的顺序已经随机打乱了）
     if(count > num_boxes) count = num_boxes;
     float x,y,w,h;
     int id;
     int i;
     int sub = 0;
-
+    // 提取count个矩形框信息
     for (i = 0; i < count; ++i) {
         x =  boxes[i].x;
         y =  boxes[i].y;
         w =  boxes[i].w;
         h =  boxes[i].h;
+        // 物体的类别并不是用字符串来表示，而是用物体类别对应的id来表示，如对于VOC数据集，共有20类物体，那么对应的id编号为从0~19号
         id = boxes[i].id;
-
+        // 矩形框大小下限：如果长宽小于0.001（矩形框的长宽不到图片长宽的0.001）认为没有包含物体
         if ((w < .001 || h < .001)) {
             ++sub;
             continue;
         }
-
+        // 最后将矩形框信息赋给truth
         truth[(i-sub)*5+0] = x;
         truth[(i-sub)*5+1] = y;
         truth[(i-sub)*5+2] = w;
         truth[(i-sub)*5+3] = h;
         truth[(i-sub)*5+4] = id;
     }
+    // 所有矩形框的信息已经提取，及时释放堆内存
     free(boxes);
 }
 
@@ -1092,52 +1125,104 @@ data load_data_swag(char **paths, int n, int classes, float jitter)
     return d;
 }
 
+/*
+** 可以参考，看一下对图像进行jitter处理的各种效果:
+** https://medium.com/@vivek.yadav/dealing-with-unbalanced-data-generating-additional-data-by-jittering-the-original-image-7497fe2119c3
+** 从所有训练图片中，随机读取n张，并对这n张图片进行数据增强，同时矫正增强后的数据标签信息。最终得到的图片的宽高为w,h（原始训练集中的图片尺寸不定），也就是网络能够处理的图片尺寸，
+** 数据增强包括：对原始图片进行宽高方向上的插值缩放（两方向上缩放系数不一定相同），下面称之为缩放抖动；随机抠取或者平移图片（位置抖动）；
+** 在hsv颜色空间增加噪声（颜色抖动）；左右水平翻转，不含旋转抖动。
+** 输入： n         一个线程读入的图片张数（详见函数内部注释）
+**       paths     所有训练图片所在路径集合，是一个二维数组，每一行对应一张图片的路径（将在其中随机取n个）
+**       m         paths的行数，也即训练图片总数
+**       w         网络能够处理的图的宽度（也就是输入图片经过一系列数据增强、变换之后最终输入到网络的图的宽度）
+**       h         网络能够处理的图的高度（也就是输入图片经过一系列数据增强、变换之后最终输入到网络的图的高度）
+**       boxes     每张训练图片最大处理的矩形框数（图片内可能含有更多的物体，即更多的矩形框，那么就在其中随机选择boxes个参与训练，具体执行在fill_truth_detection()函数中）
+**       classes   类别总数，本函数并未用到（fill_truth_detection函数其实并没有用这个参数）
+**       jitter    这个参数为缩放抖动系数，就是图片缩放抖动的剧烈程度，越大，允许的抖动范围越大（所谓缩放抖动，就是在宽高上插值缩放图片，宽高两方向上缩放的系数不一定相同）
+**       hue       颜色（hsv颜色空间）数据增强参数：色调（取值0度到360度）偏差最大值，实际色调偏差为-hue~hue之间的随机值
+**       saturation 颜色（hsv颜色空间）数据增强参数：色彩饱和度（取值范围0~1）缩放最大值，实际为范围内的随机值
+**       exposure  颜色（hsv颜色空间）数据增强参数：明度（色彩明亮程度，0~1）缩放最大值，实际为范围内的随机值
+** 返回： data类型数据，包含一个线程读入的所有图片数据（含有n张图片）
+** 说明： 最后四个参数用于数据增强，主要对原图进行缩放抖动，位置抖动（平移）以及颜色抖动（颜色值增加一定噪声），抖动一定程度上可以理解成对图像增加噪声。
+**       通过对原始图像进行抖动，实现数据增强。最后三个参数具体用法参考本函数内调用的random_distort_image()函数
+** 说明2：从此函数可以看出，darknet对训练集中图片的尺寸没有要求，可以是任意尺寸的图片，因为经该函数处理（缩放/裁剪）之后，
+**       不管是什么尺寸的照片，都会统一为网络训练使用的尺寸
+*/
 data load_data_detection(int n, char **paths, int m, int w, int h, int boxes, int classes, float jitter, float hue, float saturation, float exposure)
 {
+    // paths包含所有训练图片的路径，get_random_paths函数从中随机提出n条，即为此次读入的n张图片的路径
     char **random_paths = get_random_paths(paths, n, m);
     int i;
+    // 初始化为0,清楚内存中之前的旧值
     data d = {0};
     d.shallow = 0;
-
+    // 一次读入的图片张数：d.X中每行就是一张图片的数据，因此d.X.cols等于h*w*3
+    // n = net.batch * net.subdivisions * ngpus，net中的subdivisions这个参数暂时还没搞懂有什么用，
+    // 从parse_net_option()函数可知，net.batch = net.batch / net.subdivision，等号右边的那个batch就是
+    // 网络配置文件.cfg中设置的每个batch的图片数量，但是不知道为什么多了subdivision这个参数？总之，
+    // net.batch * net.subdivisions又得到了在网络配置文件中设定的batch值，然后乘以ngpus，是考虑多个GPU实现数据并行，
+    // 一次读入多个batch的数据，分配到不同GPU上进行训练。在load_threads()函数中，又将整个的n仅可能均匀的划分到每个线程上，
+    // 也就是总的读入图片张数为n = net.batch * net.subdivisions * ngpus，但这些图片不是一个线程读完的，而是分配到多个线程并行读入，
+    // 因此本函数中的n实际不是总的n，而是分配到该线程上的n，比如总共要读入128张图片，共开启8个线程读数据，那么本函数中的n为16,而不是总数128
     d.X.rows = n;
+    //d.X为一个matrix类型数据，其中d.X.vals是其具体数据，是指针的指针（即为二维数组），此处先为第一维动态分配内存
     d.X.vals = calloc(d.X.rows, sizeof(float*));
     d.X.cols = h*w*3;
-
+    // d.y存储了所有读入照片的标签信息，每条标签包含5条信息：类别，以及矩形框的x,y,w,h
+    // boxes为一张图片最多能够处理（参与训练）的矩形框的数（如果图片中的矩形框数多于这个数，那么随机挑选boxes个，这个参数仅在parse_region以及parse_detection中出现，好奇怪？    
+    // 在其他网络解析函数中并没有出现）。同样，d.y是一个matrix，make_matrix会指定y的行数和列数，同时会为其第一维动态分配内存
     d.y = make_matrix(n, 5*boxes);
+    // 依次读入每一张图片到d.X.vals的适当位置，同时读入对应的标签信息到d.y.vals的适当位置
     for(i = 0; i < n; ++i){
+        //读入原始的图片
         image orig = load_image_color(random_paths[i], 0, 0);
+        // 原始图片经过一系列处理（重排及变换）之后的最终得到的图片，并初始化像素值全为0.5（下面会称之为输出图或者最终图之类的）
         image sized = make_image(w, h, orig.c);
         fill_image(sized, .5);
-
+        // 缩放抖动大小：缩放抖动系数乘以原始图宽高即得像素单位意义上的缩放抖动
         float dw = jitter * orig.w;
         float dh = jitter * orig.h;
-
+        // 缩放抖动大小：缩放抖动系数乘以原始图宽高即得像素单位意义上的缩放抖动
         float new_ar = (orig.w + rand_uniform(-dw, dw)) / (orig.h + rand_uniform(-dh, dh));
         //float scale = rand_uniform(.25, 2);
+        
+        // 为了方便，引入了一个虚拟的中间图（之所以称为虚拟，是因为这个中间图并不是一个真实存在的变量），
+        // 下面两个变量nh,nw其实是中间图的高宽，而scale就是中间图相对于输出图sized的缩放尺寸（比sized大或者小）
+        // 中间图与sized 并不是保持长宽比等比例缩放，中间图的长宽比为new_ar，而sized的长宽比为w/h，
+        // 二者之间的唯一的关系就是有一条边（宽或高）的长度比例为scale
         float scale = 1;
-
+        //nw, nh为中间图的宽高，new_ar为中间图的宽高比
         float nw, nh;
 
         if(new_ar < 1){
+            // new_ar<1，说明宽度小于高度，则以高度为主，宽度按高度的比例计算
             nh = scale * h;
             nw = nh * new_ar;
         } else {
+            // 否则说明高度小于等于宽度，则以宽度为主，高度按宽度比例计算 
             nw = scale * w;
             nh = nw / new_ar;
         }
-
+        // 得到0~w-nw之间的均匀随机数（w-nw可能大于0,可能小于0，因为scale可能大于1,也可能小于1）
         float dx = rand_uniform(0, w - nw);
+        // 得到0~h-nh之间的均匀随机数（h-nh可能大于0,可能小于0）
         float dy = rand_uniform(0, h - nh);
-
+        // place_image先将orig根据中间图的尺寸nw,nh进行重排（双线性插值，不是等比例缩放，长宽比可能会变），而后，将中间图放入到sized，
+        // dx,dy是将中间图放入到sized的起始坐标位置（dx,dy若大于0,说明sized的尺寸大于中间图的尺寸，这时
+        // 可以说是将中间图随机嵌入到sized中的某个位置；dx,dy若小于0,说明sized的尺寸小于中间图的尺寸，这时
+        // sized相当于是中间图的一个mask，在中间图上随机抠图）
         place_image(orig, nw, nh, dx, dy, sized);
-
+        // 随机对图像jitter（在hsv三个通道上添加扰动），实现数据增强
         random_distort_image(sized, hue, saturation, exposure);
-
+        // 随机的决定是否进行左右翻转操作来实现数据增强（注意是直接对sized，不是对原始图，也不是中间图）
         int flip = rand()%2;
         if(flip) flip_image(sized);
+        // d.X为图像数据，是一个矩阵（二维数组），每一行为一张图片的数据
         d.X.vals[i] = sized.data;
 
-
+        // d.y包含所有图像的标签信息（包括真实类别与位置），d.y.vals是一个矩阵（二维数组），每一行含一张图片的标签信息
+        // 因为对原始图片进行了数据增强，其中的平移抖动势必会改动每个物体的矩形框标签信息（主要是矩形框的像素坐标信息），需要根据具体的数据增强方式进行相应矫正
+        // 后面4个参数就是用于数据增强后的矩形框信息矫正（nw,nh是中间图宽高，w,h是最终图宽高）
         fill_truth_detection(random_paths[i], boxes, d.y.vals[i], classes, flip, -dx/w, -dy/h, nw/w, nh/h);
 
         free_image(orig);
@@ -1191,15 +1276,35 @@ void *load_thread(void *ptr)
     return 0;
 }
 
+/*
+** 创建一个线程，读入相应图片数据（此时args.n不再是一次迭代读入的所有图片的张数，而是经过load_threads()均匀分配给每个线程的图片张数）
+** 输入： ptr    包含该线程要读入图片数据的信息（读入多少张，读入图片最终的宽高，图片路径等等）
+** 返回： phtread_t   线程id
+** 说明： 本函数实际没有做什么，就是深拷贝了args给ptr,然后创建了一个调用load_thread()函数的线程并返回线程id
+*/
 pthread_t load_data_in_thread(load_args args)
 {
     pthread_t thread;
+    // 同样第一件事深拷贝了args给ptr
     struct load_args *ptr = calloc(1, sizeof(struct load_args));
     *ptr = args;
+    // 创建一个线程，读入相应数据，绑定load_thread()函数到该线程上，第四个参数是load_thread()的输入参数，第二个参数表示线程属性，设置为0（即NULL）
     if(pthread_create(&thread, 0, load_thread, ptr)) error("Thread creation failed");
     return thread;
 }
 
+/*
+** 开辟多个线程读入图片数据，读入数据存储至ptr.d中（主要调用load_in_thread()函数完成）
+** 输入： ptr    包含所有线程要读入图片数据的信息（读入多少张，开几个线程读入，读入图片最终的宽高，图片路径等等）
+** 返回： void*  万能指针（实际上不需要返回什么）
+** 说明： 1) load_threads()是一个指针函数，只是一个返回变量为void*的普通函数，不是函数指针
+**       2) 输入ptr是一个void*指针（万能指针），使用时需要强转为具体类型的指针
+**       3) 函数中涉及四个用来存储读入数据的变量：ptr, args, out, buffers，除args外都是data*类型，所有这些变量的
+**          指针变量其实都指向同一块内存（当然函数中间有些动态变化），因此读入的数据都是互通的。
+** 流程： 本函数首先会获取要读入图片的张数、要开启线程的个数，而后计算每个线程应该读入的图片张数（尽可能的均匀分配），
+**       并创建所有的线程，并行读入数据，最后合并每个线程读入的数据至一个大data中，这个data的指针变量与ptr的指针变量
+**       指向的是统一块内存，因此也就最终将数据读入到ptr.d中（所以其实没有返回值）
+*/
 void *load_threads(void *ptr)
 {
     int i;
@@ -1210,11 +1315,13 @@ void *load_threads(void *ptr)
     free(ptr);
     data *buffers = calloc(args.threads, sizeof(data));
     pthread_t *threads = calloc(args.threads, sizeof(pthread_t));
+    //根据线程个数平均分配加载任务
     for(i = 0; i < args.threads; ++i){
         args.d = buffers + i;
         args.n = (i+1) * total/args.threads - i * total/args.threads;
         threads[i] = load_data_in_thread(args);
     }
+    //在所有的子线程将数据加载完成后整合数据
     for(i = 0; i < args.threads; ++i){
         pthread_join(threads[i], 0);
     }
