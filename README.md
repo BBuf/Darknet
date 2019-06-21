@@ -31,3 +31,4 @@ https://github.com/hgpvision/darknet
 
 https://blog.csdn.net/u014540717/column/info/13752
 
+https://blog.csdn.net/gzj2013/article/details/82456548
