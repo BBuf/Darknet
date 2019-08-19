@@ -328,7 +328,7 @@ void fill_truth_region(char *path, float *truth, int classes, int num_boxes, int
     float x,y,w,h;
     int id;
     int i;
-
+    
     for (i = 0; i < count; ++i) {
         x =  boxes[i].x;
         y =  boxes[i].y;
@@ -524,9 +524,9 @@ void fill_truth_detection(char *path, int num_boxes, float *truth, int classes, 
     char labelpath[4096];
     // // 下面一连串地调用find_replace()函数，是为了得到每张训练图片的标签数据（.txt文件）所在路径
     // 通过调用find_replace()函数，对每张图片的绝对路径进行修改，得到对应的标签数据所在路径。
-    // 比如，图片的路径为：/home/happy/Downloads/darknet_dataset/VOCdevkit/VOC2007/JPEGImages/000001.jpg，
+    // 比如，图片的路径为：/home/zxy/Downloads/darknet_dataset/VOCdevkit/VOC2007/JPEGImages/000001.jpg，
     // 通过连续调用find_place()函数，最终可以得到对应的标签数据路径labelpath为：
-    // /home/happy/Downloads/darknet_dataset/VOCdevkit/VOC2007/labels/000001.txt
+    // /home/zxy/Downloads/darknet_dataset/VOCdevkit/VOC2007/labels/000001.txt
     // 注意，下面共调用了7次find_replace函数，可以分为两部分，第一部分是将图片的文件夹名字替换为labels，
     // 图片的路径可能为JPEGImages,images或raw中的一种，所以调用了三次以应对多种情况，实际只有一次调用真正有效;
     // 第二部分是将修改后缀，图片的格式有可能为jpg,png,JPG,JPEG四种中的一种，不管是哪种，
@@ -746,20 +746,42 @@ matrix load_tags_paths(char **paths, int n, int k)
     return y;
 }
 
+/*
+** 首先调用get_apths()从filename中读取数据到list变量中，而后调用list_to_array()转存自二维数组返回
+** 输入filename 文件路径
+** 返回: char**类型，包含从文件中读取的所有信息（该函数只用于读入名称/标签信息，即读取data/**.names文件的信息）
+** 调用: 该函数在detector.c->test_detector()函数中调用，目的正如函数名，从文件中读取数据集中所有类别的名称/标签信息
+*/
 char **get_labels(char *filename)
 {
+    // 从包含数据集中所有物体类别信息的文件（data/**.names文件）中读取所有物体类别信息，存入链表plist中
     list *plist = get_paths(filename);
+    // 将所用数据集的所有类别信息（即包含所有类别的名称/标签信息）从plist中提取出来，存至二维字符数组labels中
+    // labels将包含数据集中所有类别信息，比如使用coco.data，里面包含80类物体，有person, bicycle等等
     char **labels = (char **)list_to_array(plist);
+    // 将指针复制给labels之后，就可以释放plist了，不会影响labels的
     free_list(plist);
     return labels;
 }
 
+/*
+** 释放数据d的堆内存
+** 说明： 该函数输入虽然是data类型数据，但实际上是释放data结构体中matrix类型元素X,y的vals的堆内存（有两层深度），
+** 分两种情况，浅层释放与深层释放，决定于d的标志位shallow的取值，shallow=1表示浅层释放，
+** shallow=0表示深层释放，关于浅层与深层释放，见data结构体定义处的注释，此不再赘述。
+** 什么时候需浅层释放呢？当不想删除二维数组的数据，只想清除第一层指针存储的第二层指针变量时，
+** 采用浅层释放，在释放前，二维数组的数据应当转移，使得另有指针可以访问这些保留的数据；
+** 而当不想要保留任何数据时，采用深层释放。
+*/
 void free_data(data d)
 {
     if(!d.shallow){
+        // 深层释放堆内存（注意虽然输入是d.X,d.y，但不是直接释放d.X，d.y，这二者在data结构体中根本连指针都不算。
+        // 在free_matrix()中是逐行释放d.X.vals和d.y.vals的内存，再直接释放d.X.vals和d.y.vals）
         free_matrix(d.X);
         free_matrix(d.y);
     }else{
+        // 浅层释放堆内存
         free(d.X.vals);
         free(d.y.vals);
     }
@@ -1127,7 +1149,7 @@ data load_data_swag(char **paths, int n, int classes, float jitter)
 
 /*
 ** 可以参考，看一下对图像进行jitter处理的各种效果:
-** https://medium.com/@vivek.yadav/dealing-with-unbalanced-data-generating-additional-data-by-jittering-the-original-image-7497fe2119c3
+** https://github.com/vxy10/ImageAugmentation
 ** 从所有训练图片中，随机读取n张，并对这n张图片进行数据增强，同时矫正增强后的数据标签信息。最终得到的图片的宽高为w,h（原始训练集中的图片尺寸不定），也就是网络能够处理的图片尺寸，
 ** 数据增强包括：对原始图片进行宽高方向上的插值缩放（两方向上缩放系数不一定相同），下面称之为缩放抖动；随机抠取或者平移图片（位置抖动）；
 ** 在hsv颜色空间增加噪声（颜色抖动）；左右水平翻转，不含旋转抖动。
@@ -1293,6 +1315,7 @@ pthread_t load_data_in_thread(load_args args)
     return thread;
 }
 
+// copy from https://github.com/hgpvision/darknet/blob/master/src/data.c#L355
 /*
 ** 开辟多个线程读入图片数据，读入数据存储至ptr.d中（主要调用load_in_thread()函数完成）
 ** 输入： ptr    包含所有线程要读入图片数据的信息（读入多少张，开几个线程读入，读入图片最终的宽高，图片路径等等）
@@ -1308,29 +1331,80 @@ pthread_t load_data_in_thread(load_args args)
 void *load_threads(void *ptr)
 {
     int i;
+    // 先使用(load_args*)强转void*指针，而后取ptr所指内容赋值给args
+    // 虽然args不是指针，args是深拷贝了ptr中的内容，但是要知道ptr（也就是load_args数据类型），有很多的
+    // 指针变量，args深拷贝将拷贝这些指针变量到args中（这些指针变量本身对ptr来说就是内容，
+    // 而args所指的值是args的内容，不是ptr的，不要混为一谈），因此，args与ptr将会共享所有指针变量所指的内容
     load_args args = *(load_args *)ptr;
     if (args.threads == 0) args.threads = 1;
+    // 另指针变量out=args.d，使得out与args.d指向统一块内存，之后，args.d所指的内存块会变（反正也没什么用了，变就变吧），
+    // 但out不会变，这样可以保证out与最原始的ptr指向同一块存储读入图片数据的内存块，因此最终将图片读到out中，
+    // 实际就是读到了最原始的ptr中，比如train_detector()函数中定义的args.d中
     data *out = args.d;
+    // 读入图片的总张数= batch * subdivision * ngpus，可参见train_detector()函数中的赋值
     int total = args.n;
+    // 释放ptr：ptr是传入的指针变量，传入的指针变量本身也是按值传递的，即传入函数之后，指针变量得到复制，函数内的形参ptr
+    // 获取外部实参的值之后，二者本身没有关系，但是由于是指针变量，二者之间又存在一丝关系，那就是函数内形参与函数外实参指向
+    // 同一块内存。又由于函数外实参内存是动态分配的，因此函数内的形参可以使用free()函数进行内存释放，但一般不推荐这么做，因为函数内释放内存，
+    // 会影响函数外实参的使用，可能使之成为野指针，那为什么这里可以用free()释放ptr呢，不会出现问题吗？
+    // 其一，因为ptr是一个结构体，是一个包含众多的指针变量的结构体，如data* d等（当然还有其他非指针变量如int h等），
+    // 直接free(ptr)将会导致函数外实参无法再访问非指针变量int h等（实际经过测试，在gcc编译器下，能访问但是值被重新初始化为0），
+    // 因为函数内形参和函数外实参共享一块堆内存，而这些非指针变量都是存在这块堆内存上的，内存一释放，就无法访问了；
+    // 但是对于指针变量，free(ptr)将无作为（这个结论也是经过测试的，也是用的gcc编译器），不会释放或者擦写掉ptr指针变量本身的值，
+    // 当然也不会影响函数外实参，更不会牵扯到这些指针变量所指的内存块，总的来说，
+    // free(ptr)将使得ptr不能再访问指针变量（如int h等，实际经过测试，在gcc编译器下，能访问但是值被重新初始化为0），
+    // 但其指针变量本身没有受影响，依旧可以访问；对于函数外实参，同样不能访问非指针变量，而指针变量不受影响，依旧可以访问。
+    // 其二，darknet数据读取的实现一层套一层（似乎有点罗嗦，总感觉代码可以不用这么写的:)），具体调用过程如下：
+    // load_data(load_args args)->load_threads(load_args* ptr)->load_data_in_thread(load_args args)->load_thread(load_args* ptr)，
+    // 就在load_data()中，重新定义了ptr，并为之动态分配了内存，且深拷贝了传给load_data()函数的值args，也就是说在此之后load_data()函数中的args除了其中的指针变量指着同一块堆内存之外，
+    // 二者的非指针变量再无瓜葛，不管之后经过多少个函数，对ptr的非指针变量做了什么改动，比如这里直接free(ptr)，使得非指针变量值为0,都不会影响load_data()中的args的非指针变量，也就不会影响更为顶层函数中定义的args的非指针变量的值，
+    // 比如train_detector()函数中的args，train_detector()对args非指针变量赋的值都不会受影响，保持不变。综其两点，此处直接free(ptr)是安全的。
+    // 说明：free(ptr)函数，确定会做的事是使得内存块可以重新分配，且不会影响指针变量ptr本身的值，也就是ptr还是指向那块地址， 虽然可以使用，但很危险，因为这块内存实际是无效的，
+    //      系统已经认为这块内存是可分配的，会毫不考虑的将这块内存分给其他变量，这样，其值随时都可能会被其他变量改变，这种情况下的ptr指针就是所谓的野指针（所以经常可以看到free之后，置原指针为NULL）。
+    //      而至于free(ptr)还不会做其他事情，比如会不会重新初始化这块内存为0（擦写掉），以及怎么擦写，这些操作，是不确定的，可能跟具体的编译器有关（个人猜测），
+    //      经过测试，对于gcc编译器，free(ptr)之后，ptr中的非指针变量的地址不变，但其值全部擦写为0；ptr中的指针变量，丝毫不受影响，指针变量本身没有被擦写，
+    //      存储的地址还是指向先前分配的内存块，所以ptr能够正常访问其指针变量所指的值。测试代码为darknet_test_struct_memory_free.c。
+    //      不知道这段测试代码在VS中执行会怎样，还没经过测试，也不知道换用其他编译器（darknet的Makefile文件中，指定了编译器为gcc），darknet的编译会不会有什么问题？？
+    //      关于free()，可以看看：http://blog.sina.com.cn/s/blog_615ec1630102uwle.html，文章最后有一个很有意思的比喻，但意思好像就和我这里说的有点不一样了（到底是不是编译器搞得鬼呢？？）。
     free(ptr);
+    // 每一个线程都会读入一个data，定义并分配args.thread个data的内存
     data *buffers = calloc(args.threads, sizeof(data));
+    // 此处定义了多个线程，并为每个线程动态分配内存
     pthread_t *threads = calloc(args.threads, sizeof(pthread_t));
-    //根据线程个数平均分配加载任务
     for(i = 0; i < args.threads; ++i){
+        // 此处就承应了上面的注释，args.d指针变量本身发生了改动，使得本函数的args.d与out不再指向同一块内存，
+        // 改为指向buffers指向的某一段内存，因为下面的load_data_in_thread()函数统一了结口，需要输入一个load_args类型参数，
+        // 实际是想把图片数据读入到buffers[i]中，只能令args.d与buffers[i]指向同一块内存
         args.d = buffers + i;
+        // 下面这句很有意思，因为有多个线程，所有线程读入的总图片张数为total，需要将total均匀的分到各个线程上，
+        // 但很可能会遇到total不能整除的args.threads的情况，比如total = 61, args.threads =8,显然不能做到
+        // 完全均匀的分配，但又要保证读入图片的总张数一定等于total，用下面的语句刚好在尽量均匀的情况下，
+        // 保证总和为total，比如61,那么8个线程各自读入的照片张数分别为：7, 8, 7, 8, 8, 7, 8, 8
         args.n = (i+1) * total/args.threads - i * total/args.threads;
+        // 开启线程，读入数据到args.d中（也就读入到buffers[i]中）
+        // load_data_in_thread()函数返回所开启的线程，并存储之前已经动态分配内存用来存储所有线程的threads中，
+        // 方便下面使用pthread_join()函数控制相应线程
         threads[i] = load_data_in_thread(args);
     }
-    //在所有的子线程将数据加载完成后整合数据
+
     for(i = 0; i < args.threads; ++i){
+        // 以阻塞的方式等待线程threads[i]结束：阻塞是指阻塞启动该子线程的母线程（此处应为主线程），
+        // 是母线程处于阻塞状态，一直等待所有子线程执行完（读完所有数据）才会继续执行下面的语句
+        // 关于多线程的使用，进行过代码测试，测试代码对应：darknet_test_pthread_join.c
         pthread_join(threads[i], 0);
     }
+    // 多个线程读入所有数据之后，分别存储到buffers[0],buffers[1]...中，接着使用concat_datas()函数将buffers中的数据全部合并成一个大数组得到out
     *out = concat_datas(buffers, args.threads);
+    // 也就只有out的shallow敢置为0了，为什么呢？因为out是此次迭代读入的最终数据，该数据参与训练（用完）之后，当然可以深层释放了，而此前的都是中间变量，
+    // 还处于读入数据阶段，万不可设置shallow=0
     out->shallow = 0;
+    // 释放buffers，buffers也是个中间变量，切记shallow设置为1,如果设置为0,那就连out中的数据也没了
     for(i = 0; i < args.threads; ++i){
         buffers[i].shallow = 1;
         free_data(buffers[i]);
     }
+    // 最终直接释放buffers,threads，注意buffers是一个存储data的一维数组，上面循环中的内存释放，实际是释放每一个data的部分内存
+    // （这部分内存对data而言是非主要内存，不是存储读入数据的内存块，而是存储指向这些内存块的指针变量，可以释放的）
     free(buffers);
     free(threads);
     return 0;
@@ -1343,12 +1417,29 @@ void load_data_blocking(load_args args)
     load_thread(ptr);
 }
 
+/*
+** 开辟线程，读入一次迭代所需的所有图片数据：读入图片的张数为args.n = net.batch * net.subdivisions * ngpus，读入数据将存入args.d中（虽然args是按值传递的，但是args.d是指针变量，函数内改变args.d所指的内容在函数外也是有效的）
+** 输入： args    包含要读入图片数据的信息（读入多少张，开几个线程读入，读入图片最终的宽高，图片路径等等）
+** 返回： 创建的读取数据的线程id，以便于外界控制线程的进行
+** 说明： darknet作者在实现读入图片数据的时候，感觉有点绕来绕去的（也许此中有深意，只是我还未明白～），
+**       总的流程是：load_data(load_args args)->load_threads(load_args* ptr)->load_data_in_thread(load_args args)->load_thread(load_args* ptr),
+**       load_thread()函数中会选择具体的读入函数，比如load_data_detection()，要强调的是，所有这些函数，都会输入load_args类型参数，或者是其指针，
+**       而且很多函数开头就会新建一个args，并且深拷贝传入的args，而后返回新建的args，同时可能会随意改动甚至释放传入的args，这一整串流程只要记住一点：不管args在之后的函数中怎么变，
+**       其中的指针变量所指的内存块其实都是一样的（所以不管在哪个函数中，不要随意深层释放args.d的数据，除非是真正的用完了，而这里还处于数据读入阶段，所以决不能深层释放args.d）；
+**       而非指针变量，每个函数都不尽相同，但是没有关系，因为load_data()函数中传入的args是按值传递（不是指针）的，不管之后的函数怎么改动args的非指针变量，都不会影响load_data()函数外的值。
+** 碎碎念（TODO）：又是按值传递的哎，虽然上面说道因为按值传递使得更改args非指针变量不会影响外界的args，但是传入指针也可以做到啊，反正一进load_data()就深拷贝了args给ptr，而load_data()也没改动args的非指针变量。
+*/
+
 pthread_t load_data(load_args args)
 {
+    // 定义一个线程id
     pthread_t thread;
+    // 深拷贝args到ptr（虽说是深拷贝，但要注意args还有很多的指针变量，所有这些指针变量，ptr与args都指向同一内存块）
     struct load_args *ptr = calloc(1, sizeof(struct load_args));
     *ptr = args;
+    // 创建相应线程，并绑定load_threads()函数到该线程上，第二参数是线程的属性，这里设置为0（即NULL）,第四个参数ptr就是load_threads()的输入参数
     if(pthread_create(&thread, 0, load_threads, ptr)) error("Thread creation failed");
+    // 返回创建的线程id
     return thread;
 }
 
@@ -1528,41 +1619,79 @@ data load_data_tag(char **paths, int n, int m, int k, int min, int max, int size
     if(m) free(paths);
     return d;
 }
-
+/*
+** 合并矩阵m1,m2至一个大矩阵并返回
+** 输入： m1    待合并的矩阵1
+**       m2    待合并的矩阵2
+** 返回： matrix类型，合并后的大矩阵
+*/
 matrix concat_matrix(matrix m1, matrix m2)
 {
     int i, count = 0;
+    // 新建返回的大矩阵
     matrix m;
+    // 大矩阵列数不变，行数是m1,m2之后（一行对应一张图片数据）
     m.cols = m1.cols;
     m.rows = m1.rows+m2.rows;
+    // 为vals的第一维动态分配内存（下面并没有为第二维动态分配内存，从下面的for循环可以看出，第二维采用浅拷贝方式）
     m.vals = calloc(m1.rows + m2.rows, sizeof(float*));
     for(i = 0; i < m1.rows; ++i){
+        // 为vals的每一行赋值
+        // 注意m1.vals[i]是每一行的首地址，因此m1.vals[i]是个指针变量，也就是此处直接将每行的地址赋值给了待输出矩阵的每一行的指针变量（前拷贝），
+        // 所以m实际与m1共享了数据（指向了同一块内存）
         m.vals[count++] = m1.vals[i];
     }
+    // 紧接着将m2中的图片数据逐行拷贝给大矩阵m（浅拷贝）
     for(i = 0; i < m2.rows; ++i){
         m.vals[count++] = m2.vals[i];
     }
     return m;
 }
 
+/*
+** 合并某一块图片数据到大data中并返回
+** 输入： d1    待合并的data块
+**       d2    待合并的data块
+** 返回： data类型数据
+*/
 data concat_data(data d1, data d2)
 {
     data d = {0};
     d.shallow = 1;
+    // 合并图片数据至d.X中
     d.X = concat_matrix(d1.X, d2.X);
+    // 合并图片的标签数据至d.y中
     d.y = concat_matrix(d1.y, d2.y);
     d.w = d1.w;
     d.h = d1.h;
     return d;
 }
 
+/*
+** 合并读入的所有图片数据至一个data中：图片数据不是一起读入的，分了多个线程读入，全部存储在d中（d是一个元素类型为data的一维数组）
+** 输入： d    读入的所有图片数据，第i个线程读入的部分图片数据存储在d[i]中
+**       n    d的维数，也即数据分了多少块（使用多少个线程读入）
+** 返回： data类型，包含所有图片
+** 说明： 虽然返回的out是在函数内新建的，但实际上，out都只是浅拷贝了这些碎块的图片数据，也即与这些碎块共享数据，
+**       因此，无论是哪个变量，其数据都不能释放（即data.shallow只能设置为1,不能深层释放数据的内存）
+*/
 data concat_datas(data *d, int n)
 {
     int i;
     data out = {0};
     for(i = 0; i < n; ++i){
+        // i = 0时，因为out = {0},表明默认初始化其中所有的元素为0值，对于指针变量而言，那就是空指针，
+        // free()函数可以接受一个空指针，此时free()函数将无作为，但不会出错；当i != 1时，out等于上一次循环得到的new，
+        // 在concat_data()函数中，会置其shallow元素值为1,也即进行浅层释放，为什么进行浅层释放呢？
+        // 整个的concat_datas函数在合并矩阵，在合并每一个小矩阵时，小矩阵的数据并没有进行深拷贝（深拷贝是指内容拷贝），
+        // 而是直接将小矩阵每一行的指针变量赋值给了大矩阵的对应行的指针变量（浅拷贝）（可以回看data.c文件中的concat_matrix()函数for循环中的赋值操作，
+        // m1.vals[i]是指向二维数组每一行开头的指针变量，也即复制的是指针变量本身，而不是指针变量所指的值，这就是浅拷贝），
+        // 所以小矩阵out与得到的新的大矩阵实际会共享数据，因此，下面只能释放out.X.vals及out.y.vals用于存储每一行指针变量的堆内存，
+        // 而不能内释放用于存储真实数据的堆内存，也即只能进行浅层释放，不能进行深层释放。
         data new = concat_data(d[i], out);
         free_data(out);
+        // 置out等于新得到的大矩阵new，此时out.X.vals以及out.y.vals存储的指向每一行数据的指针变量包括
+        // 目前为止得到的整个大矩阵的所有行
         out = new;
     }
     return out;
@@ -1621,13 +1750,30 @@ void get_random_batch(data d, int n, float *X, float *y)
         memcpy(y+j*d.y.cols, d.y.vals[index], d.y.cols*sizeof(float));
     }
 }
-
+/*
+** 从输入d中深拷贝n张图片的数据与标签信息至X与y中：将d.X.vals以及d.y.vals（如有必要）逐行深拷贝至X,y中
+** 输入： d    读入的图片数据，按行存入其中（一张图片对应一行，每一行又按行存储每张图片）
+**       n    从d中深拷贝n张图片的数据与标签信息到X与y中
+**       offset    相对d首地址的偏移，表示从d中哪张图片开始拷贝（从此往后拷n张图片）
+**       X    d.X.vals目标存储变量
+**       y    d.y.vals目标存储变量
+** 注意：举例说明，在network.c中的train_network()中，调用了本函数，其中输入n=net.batch（关于net.batch这个参数，可以参考network.h中的注释），
+**      而d中实际包含了的图片张数为：net.batch*net.subdivision（可以参考detector.c中的train_detector(),你可能注意到这里没有乘以ngpu，
+**      是因为train_network()函数对应处理ngpu=1的情况，如果有多个gpu，那么会首先调用train_networks()函数，在其之中会调用get_data_part()将数据平分至每个gpu上，
+**      而后再调用train_network()，总之最后train_work()的输入d中只包含net.batch*net.subdivision张图片），可知本函数只是获取其中一个小batch图片，事实上，
+**      从train_network()函数中也可以看出，每次训练一个真实的batch的图片（所谓真实的batch，是指网络配置文件中指定的一个batch中所含的图片张数，详细参考network.h中的注释），
+**      又分了d.X.rows/batch次完成，d.X.rows/batch实际就是net.subdivision的值（可以参考data.c中load_data_detection()）。
+*/
 void get_next_batch(data d, int n, int offset, float *X, float *y)
 {
     int j;
+    // 下面逐行将输入d中的数据深拷贝至X中
     for(j = 0; j < n; ++j){
         int index = offset + j;
+        // memcpy(void* destination,const void *source,size_t num);函数用来复制块内存，常用于数组间的复制赋值（指针所指内容复制，不是指针复制）
+        // 此处将d.X中的数据d.X.vals中的某一行深拷贝至输入X中
         memcpy(X+j*d.X.cols, d.X.vals[index], d.X.cols*sizeof(float));
+        // 如果y也分配了内存（也有这个需求），那么也将d.y中的某一行拷贝至y中
         if(y) memcpy(y+j*d.y.cols, d.y.vals[index], d.y.cols*sizeof(float));
     }
 }
