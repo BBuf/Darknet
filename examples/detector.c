@@ -127,7 +127,6 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
            save_image(im, "truth11");
            }
          */
-
         printf("Loaded: %lf seconds\n", what_time_is_it_now()-time);
 
         time=what_time_is_it_now();
@@ -153,17 +152,17 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
             char buff[256];
             sprintf(buff, "%s/%s.backup", backup_directory, base);
             save_weights(net, buff);
-        }
-        if(i%10000==0 || (i < 1000 && i%100 == 0)){
+            }
+            if(i%10000==0 || (i < 1000 && i%100 == 0)){
 #ifdef GPU
-            if(ngpus != 1) sync_nets(nets, ngpus, 0);
+                if(ngpus != 1) sync_nets(nets, ngpus, 0);
 #endif
-            char buff[256];
-            sprintf(buff, "%s/%s_%d.weights", backup_directory, base, i);
-            save_weights(net, buff);
+                char buff[256];
+                sprintf(buff, "%s/%s_%d.weights", backup_directory, base, i);
+                save_weights(net, buff);
+            }
+            free_data(train);
         }
-        free_data(train);
-    }
 #ifdef GPU
     if(ngpus != 1) sync_nets(nets, ngpus, 0);
 #endif
