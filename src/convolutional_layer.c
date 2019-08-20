@@ -62,12 +62,25 @@ void binarize_input(float *input, int n, int size, float *binary)
         }
     }
 }
-
+/*
+** 根据输入图像的高度，pad，卷积核尺寸以及步长计算输出的特征图的高度
+*/
 int convolutional_out_height(convolutional_layer l)
 {
+    // pad是每边补0的个数
+    // 当stride=1, pad=size/2(整数除法，会向下取整)时, 输出高度等于输入高度(same策略)
+    // 当stride=1,pad=0时，为valid策略
+    // 当stride不等于1时，输出高度恒小于输入高度（尺寸一定会缩小）
+    // 计算公式推导：设输出高度为x，总图像高度为h+2*pad个像素，输出高度为x，则共有x-1次卷积核移位，
+    // 共占有(x-1)*stride+size个像素，可能还剩余res个像素，且res一定小于stride（否则还可以再移位一次），
+    // 因此有(x-1)*stride+size+res=h+2*pad，->x=(h+2*pad-size)/stride+1-res/stride，因为res<stride，
+    // 对于整数除法来说，值为0,于是得到最终的输出高度为x=(h+2*pad-size)/stride+1
     return (l.h + 2*l.pad - l.size) / l.stride + 1;
 }
 
+/*
+** 和上个函数原理一样
+*/
 int convolutional_out_width(convolutional_layer l)
 {
     return (l.w + 2*l.pad - l.size) / l.stride + 1;
@@ -173,13 +186,31 @@ void cudnn_convolutional_setup(layer *l)
 #endif
 #endif
 
+/*
+** 输入: batch 每个batch含有的图片数
+** h 图像高度(行数)
+** w 图像宽度(列数)
+** c 输入图像通道数
+** n 卷积核个数
+** size 卷积核尺寸
+** stride 步长
+** groups 分组卷积的分组数
+** padding 四周补0长度
+** activation 激活函数类别
+** batch_normalize 是否进行BN
+** binary 是否对权重进行二值化
+** xnor 是否对权重以及输入进行二值化
+** adam 优化方式
+*/
+
 convolutional_layer make_convolutional_layer(int batch, int h, int w, int c, int n, int groups, int size, int stride, int padding, ACTIVATION activation, int batch_normalize, int binary, int xnor, int adam)
 {
     int i;
+    // convolutionnal_layer 是使用typedef定义的layer的别名
     convolutional_layer l = {0};
-    l.type = CONVOLUTIONAL;
+    l.type = CONVOLUTIONAL; // 层属性: 卷积层
 
-    l.groups = groups;
+    l.groups = groups; 
     l.h = h;
     l.w = w;
     l.c = c;
@@ -191,13 +222,18 @@ convolutional_layer make_convolutional_layer(int batch, int h, int w, int c, int
     l.size = size;
     l.pad = padding;
     l.batch_normalize = batch_normalize;
-
+ 
+    // 该卷积层总的权重元素(卷积核元素)个数=输入图像通道 / 分组数*卷积核个数*卷积核尺寸
     l.weights = calloc(c/groups*n*size*size, sizeof(float));
+    // 敏感图和特征图的尺寸应该是一样的
     l.weight_updates = calloc(c/groups*n*size*size, sizeof(float));
-
+    // bias就是Wx+b中的b（上面的weights就是W），有多少个卷积核，就有多少个b（与W的个数一一对应，每个W的元素个数为c*size*size）
     l.biases = calloc(n, sizeof(float));
+    // bias的敏感图，维度和bias一致
     l.bias_updates = calloc(n, sizeof(float));
 
+    // 该卷积层总的权重元素个数（权重元素个数等于输入数据的通道数/分组数*卷积核个数*卷积核的二维尺寸，注意因为每一个卷积核是同时作用于输入数据
+    // 的多个通道上的，因此实际上卷积核是三维的，包括两个维度的平面尺寸，以及输入数据通道数这个维度，每个通道上的卷积核参数都是独立的训练参数）
     l.nweights = c/groups*n*size*size;
     l.nbiases = n;
 
@@ -441,6 +477,7 @@ void backward_bias(float *bias_updates, float *delta, int batch, int n, int size
         }
     }
 }
+
 
 void forward_convolutional_layer(convolutional_layer l, network net)
 {
