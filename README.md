@@ -540,6 +540,57 @@ data load_data_detection(int n, char **paths, int m, int w, int h, int boxes, in
 
 可以看到在examples/detector.c中的`train_detector()`函数共有3次调用`load_data(args)`，第一次调用是为训练阶段做好数据准备工作，充分利用这段时间来加载数据。第二次调用是在resize操作中，可以看到这里只有random和count同时满足条件的情况下会做resize操作，也就是说resize加载的数据是未进行resize过的，因此，需要调整args中的图像宽高之后再重新调用`load_data(args)`加载数据。反之，不做任何处理，之前加载的数据仍然可用。第三次调用就是在数据加载完成后，将加载好的数据保存起来`train=buffer;`，然后开始下一次的加载工作。这一次的数据就会进行这一次的训练操作(调用`train_network`函数)。
 
+## 前向传播Forward
+
+前向传播的主函数在src/network.c中实现，代码如下：
+
+```c++
+/* 
+** 前向计算网络net每一层的输出
+** netp: 构建好的整个网络
+** 遍历net的每一层网络，从第0层到最后一层，逐层计算每层的输出
+*/
+void forward_network(network *netp)
+{
+#ifdef GPU
+    if(netp->gpu_index >= 0){
+        forward_network_gpu(netp);   
+        return;
+    }
+#endif
+    network net = *netp;
+    int i;
+    // 遍历所有层，从第一层到最后一层，逐层进行前向传播，网络共有net.n层
+    for(i = 0; i < net.n; ++i){
+        // 当前处理的层为网络的第i层
+        net.index = i;
+        // 获取当前层
+        layer l = net.layers[i];
+        // 如果当前层的l.delta已经动态分配了内存，则调用fill_cpu()函数将其所有元素初始化为0
+        if(l.delta){
+            // 第一个参数为l.delta的元素个数，第二个参数为初始化值，为0
+            fill_cpu(l.outputs * l.batch, 0, l.delta, 1);
+        }
+        // 前向传播: 完成当前层前向推理
+        l.forward(l, net);
+        // 完成某一层的推理时，置网络的输入为当前层的输出（这将成为下一层网络的输入），要注意的是，此处是直接更改指针变量net.input本身的值，
+        // 也就是此处是通过改变指针net.input所指的地址来改变其中所存内容的值，并不是直接改变其所指的内容，
+        // 所以在退出forward_network()函数后，其对net.input的改变都将失效，net.input将回到进入forward_network()之前时的值。
+        net.input = l.output;
+        if(l.truth) {
+            net.truth = l.output;
+        }
+    }
+    calc_network_cost(netp);
+}
+```
+
+为了更深入的理解前向传播，我们来理解几个darknet中的经典layer的前向传播实现。
+
+### 前向传播-卷积层
+
+
+
 # 参考资料
 
 https://blog.csdn.net/gzj2013/article/details/84837198

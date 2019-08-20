@@ -60,8 +60,16 @@ network *load_network(char *cfg, char *weights, int clear)
     return net;
 }
 
+/*
+** 计算当前已经读入多少个batch(提醒一下: 网络配置文件中的batch是指每个batch中有多少张图片)
+** tensorflow实战中一般用batch_size来表示一个batch中图片张数，num_batches来表示有多少个batch
+** 输入: 构建的整个神经网络
+** 输出: 已经读入的batch个数
+*/
 size_t get_current_batch(network *net)
 {
+    // net.seen为截至目前已经读入的图片张数，batch*subdivisons为一个batch含有的图片张数，二者一除即可得截至目前已经读入的batch个数
+    // net.subdivisions这个参数目前还不知道有什么用，总之net.batch*net.subdivisions等于.cfg中指定的batch值（参看：parser.c中的parse_net_options()函数）
     size_t batch_num = (*net->seen)/(net->batch*net->subdivisions);
     return batch_num;
 }
@@ -174,11 +182,16 @@ char *get_layer_string(LAYER_TYPE a)
     return "none";
 }
 
-//为网络结构体分配内存空间
+/*
+** 新建一个空网络，并为网络中部分指针参数动态分配内存
+** 输入: 神经网络层数
+** 说明: 该函数只为网络的三个指针参数动态分配了内存，并没有为所有指针参数分配内存
+*/
 network *make_network(int n)
 {
     network *net = calloc(1, sizeof(network));
     net->n = n;
+    // 为每一层分配内存
     net->layers = calloc(net->n, sizeof(layer));
     net->seen = calloc(1, sizeof(size_t));
     net->t    = calloc(1, sizeof(int));
@@ -186,6 +199,11 @@ network *make_network(int n)
     return net;
 }
 
+/* 
+** 前向计算网络net每一层的输出
+** netp: 构建好的整个网络
+** 遍历net的每一层网络，从第0层到最后一层，逐层计算每层的输出
+*/
 void forward_network(network *netp)
 {
 #ifdef GPU
@@ -196,13 +214,22 @@ void forward_network(network *netp)
 #endif
     network net = *netp;
     int i;
+    // 遍历所有层，从第一层到最后一层，逐层进行前向传播，网络共有net.n层
     for(i = 0; i < net.n; ++i){
+        // 当前处理的层为网络的第i层
         net.index = i;
+        // 获取当前层
         layer l = net.layers[i];
+        // 如果当前层的l.delta已经动态分配了内存，则调用fill_cpu()函数将其所有元素初始化为0
         if(l.delta){
+            // 第一个参数为l.delta的元素个数，第二个参数为初始化值，为0
             fill_cpu(l.outputs * l.batch, 0, l.delta, 1);
         }
+        // 前向传播: 完成当前层前向推理
         l.forward(l, net);
+        // 完成某一层的推理时，置网络的输入为当前层的输出（这将成为下一层网络的输入），要注意的是，此处是直接更改指针变量net.input本身的值，
+        // 也就是此处是通过改变指针net.input所指的地址来改变其中所存内容的值，并不是直接改变其所指的内容，
+        // 所以在退出forward_network()函数后，其对net.input的改变都将失效，net.input将回到进入forward_network()之前时的值。
         net.input = l.output;
         if(l.truth) {
             net.truth = l.output;
@@ -261,6 +288,9 @@ int get_predicted_class_network(network *net)
     return max_index(net->output, net->outputs);
 }
 
+/*
+** 反向计算网络net每一层的梯度图，
+*/
 void backward_network(network *netp)
 {
 #ifdef GPU
@@ -289,7 +319,9 @@ void backward_network(network *netp)
 
 float train_network_datum(network *net)
 {
+    // 更新目前已经处理的图片数量：每次处理一个batch，故直接添加l.batch
     *net->seen += net->batch;
+    // 标记处于训练阶段
     net->train = 1;
     forward_network(net);
     backward_network(net);
@@ -311,6 +343,7 @@ float train_network_sgd(network *net, data d, int n)
     }
     return (float)sum/(n*batch);
 }
+
 
 float train_network(network *net, data d)
 {
