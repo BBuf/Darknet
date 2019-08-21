@@ -1,5 +1,17 @@
 #include "im2col.h"
 #include <stdio.h>
+/*
+** 从输入的多通道数组im（存储图像数据）中获取指定行，列，通道数处的元素值
+** im:  函数的输入，所有的数据存成一个一维数组
+** height: 每一个通道的高度(即是输入图像的真正高度，补0之前)
+** width: 每一个通道的宽度(即是输入图像的真正宽度，补0之前)
+** channles： 输入通道数
+** row: 要提取的元素所在的行(padding之后的行数)
+** col: 要提取的元素所在的列(padding之后的列数)
+** channel: 要提取的元素所在的通道
+** pad: 图像上下左右补0的个数，四周是一样的
+** 返回im中channel通道，row-pad行,col-pad列处的元素值
+*/
 float im2col_get_pixel(float *im, int height, int width, int channels,
                         int row, int col, int channel, int pad)
 {
