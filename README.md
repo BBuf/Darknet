@@ -825,6 +825,10 @@ K=input_channels * kernel_h * kernel_w
 
 ![](image/16.png)
 
+### 前向传播BN层
+
+
+
 # 参考资料
 
 https://blog.csdn.net/gzj2013/article/details/84837198
