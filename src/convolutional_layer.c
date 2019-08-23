@@ -602,7 +602,7 @@ void backward_convolutional_layer(convolutional_layer l, network net)
     //每张输出特征图的元素个数：out_w，out_h是输出特征图的宽高
     int k = l.out_w*l.out_h; 
     // dz / dx = dz / df * df / dx 链式法则
-	// 需要明确的一点是：求导是从网络最后一层往前推
+// 需要明确的一点是：求导是从网络最后一层往前推
     // 计算当前层激活函数对加权输入的导数值并乘以l.delta相应元素，从而彻底完成当前层敏感度图的计算，得到当前层的敏感度图l.delta。
     // l.output存储了该层网络的所有输出:该层网络接收一个batch的输入图片，其中每张图片经过卷积处理后得到的特征图尺寸为:l.out_w*l.out_h
     // 该层卷积网络共有l.n个卷积核，因此一张输入图片共输出l.n张宽高为l.out_w,l.out_h的特征图（l.output为一张图所有输出特征图的总元素个数），
