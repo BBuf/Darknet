@@ -825,7 +825,98 @@ K=input_channels * kernel_h * kernel_w
 
 ![](image/16.png)
 
-### 前向传播BN层
+### 前向传播-BN层
+
+```c++
+/*
+** 计算输入数据x的平均值，输出的mean是一个矢量，比如如果x是多张三通道的图片，那么mean的维度就为通道3
+** 由于每次训练输入的都是一个batch的图片，因此最终会输出batch张三通道的图片，mean中的第一个元素就是第
+** 一个通道上全部batch张输出特征图所有元素的平均值，本函数的用处之一就是batch normalization的第一步了
+** x: 包含所有数据，比如l.output，其包含的元素个数为l.batch*l.outputs
+** batch: 一个batch中包含的图片张数，即l.batch
+** filters: 该层神经网络的滤波器个数，也即该层网络输出图片的通道数（比如对卷积网络来说，就是核的个数了）
+** spatial: 该层神经网络每张输出特征图的尺寸，也即等于l.out_w*l.out_h
+** mean: 求得的平均值，维度为filters，也即每个滤波器对应有一个均值（每个滤波器会处理所有图片）
+** x的内存排布？此处还是结合batchnorm_layer.c中的forward_batch_norm_layer()函数的调用来解释，其中x为l.output，其包含的元素个数为l
+** 有l.batch行，每行有l.out_c*l.out_w*l.out_h个元素，每一行又可以分成l.out_c行，l.out_w*l.out_h列，
+** 那么l.mean中的每一个元素，是某一个通道上所有batch的输出的平均值
+** （比如卷积层，有3个核，那么输出通道有3个，每张输入图片都会输出3张特征图，可以理解每张输出图片是3通道的，
+** 若每次输入batch=64张图片，那么将会输出64张3通道的图片，而mean中的每个元素就是某个通道上所有64张图片
+** 所有元素的平均值，比如第1个通道上，所有64张图片像素平均值）
+*/
+void mean_cpu(float *x, int batch, int filters, int spatial, float *mean)
+{
+    // scale即是均值中的分母项
+    float scale = 1./(batch * spatial);
+    int i,j,k;
+    // 外循环次数为filters，也即mean的维度，每次循环将得到一个平均值
+    for(i = 0; i < filters; ++i){
+        mean[i] = 0;
+        // 中间循环次数为batch，也即叠加每张输入图片对应的某一通道上的输出
+        for(j = 0; j < batch; ++j){
+            // 内层循环即叠加一张输出特征图的所有像素值
+            for(k = 0; k < spatial; ++k){
+                // 计算偏移
+                int index = j*filters*spatial + i*spatial + k;
+                mean[i] += x[index];
+            }
+        }
+        mean[i] *= scale;
+    }
+}
+
+/*
+** 计算输入x中每个元素的方差
+** 本函数的主要用处应该就是batch normalization的第二步了
+** x: 包含所有数据，比如l.output，其包含的元素个数为l.batch*l.outputs
+** batch: 一个batch中包含的图片张数，即l.batch
+** filters: 该层神经网络的滤波器个数，也即是该网络层输出图片的通道数
+** spatial: 该层神经网络每张特征图的尺寸，也即等于l.out_w*l.out_h
+** mean: 求得的平均值，维度为filters，也即每个滤波器对应有一个均值（每个滤波器会处理所有图片）
+*/
+void variance_cpu(float *x, float *mean, int batch, int filters, int spatial, float *variance)
+{
+    // 这里计算方差分母要减去1的原因是无偏估计，可以看：https://www.zhihu.com/question/20983193
+    // 事实上，在统计学中，往往采用的方差计算公式都会让分母减1,这时因为所有数据的方差是基于均值这个固定点来计算的，
+    // 对于有n个数据的样本，在均值固定的情况下，其采样自由度为n-1（只要n-1个数据固定，第n个可以由均值推出）
+    float scale = 1./(batch * spatial - 1);
+    int i,j,k;
+    for(i = 0; i < filters; ++i){
+        variance[i] = 0;
+        for(j = 0; j < batch; ++j){
+            for(k = 0; k < spatial; ++k){
+                int index = j*filters*spatial + i*spatial + k;
+                // 每个元素减去均值求平方
+                variance[i] += pow((x[index] - mean[i]), 2);
+            }
+        }
+        variance[i] *= scale;
+    }
+}
+void normalize_cpu(float *x, float *mean, float *variance, int batch, int filters, int spatial)
+{
+    int b, f, i;
+    for(b = 0; b < batch; ++b){
+        for(f = 0; f < filters; ++f){
+            for(i = 0; i < spatial; ++i){
+                int index = b*filters*spatial + f*spatial + i;
+                x[index] = (x[index] - mean[f])/(sqrt(variance[f]) + .000001f);
+            }
+        }
+    }
+}
+void scal_cpu(int N, float ALPHA, float *X, int INCX)
+{
+    int i;
+    for(i = 0; i < N; ++i) X[i*INCX] *= ALPHA;
+}
+```
+
+这4个函数对应了前向传播时，BN的计算4个计算公式：
+
+![](image/17.png)
+
+### 前向传播-Pooling层
 
 
 
