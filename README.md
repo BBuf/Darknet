@@ -918,6 +918,102 @@ void scal_cpu(int N, float ALPHA, float *X, int INCX)
 
 ### 前向传播-Pooling层
 
+```c++
+/*
+** 最大池化层的前向传播函数
+** l: 当前层(最大池化层)
+** net: 整个网络结构
+** 最大池化层处理图像的方式与卷积层类似，也是将最大池化核在图像
+** 平面上按照指定的跨度移动，并取对应池化核区域中最大元素值为对应输出元素。
+** 最大池化层没有训练参数（没有权重以及偏置），因此，相对与卷积来说，
+** 其前向（以及下面的反向）过程比较简单，实现上也是非常直接，不需要什么技巧。
+*/
+void forward_maxpool_layer(const maxpool_layer l, network net)
+{
+    int b,i,j,k,m,n;
+    // 初始偏移设定为四周补0长度的负值
+    int w_offset = -l.pad/2;
+    int h_offset = -l.pad/2;
+    // 获取当前层的输出尺寸
+    int h = l.out_h;
+    int w = l.out_w;
+    // 获取当前层输入图像的通道数，为什么是输入通道数？不应该为输出通道数吗？
+    // 实际二者没有区别，对于最大池化层来说，输入有多少通道，输出就有多少通道！
+    int c = l.c;
+    // 遍历batch中每一张输入图片，计算得到与每一张输入图片具有相同通道的输出图
+    for(b = 0; b < l.batch; ++b){
+        // 对于每张输入图片，将得到通道数一样的输出图，以输出图为基准，按输出图通道，行，列依次遍历
+        // （这对应图像在l.output的存储方式，每张图片按行铺排成一大行，然后图片与图片之间再并成一行）。
+        // 以输出图为基准进行遍历，最终循环的总次数刚好覆盖池化核在输入图片不同位置进行池化操作。
+        for(k = 0; k < c; ++k){
+            for(i = 0; i < h; ++i){
+                for(j = 0; j < w; ++j){
+                    // out_index为输出图中的索引：out_index = b * c * w * h + k * w * h + h * w + w，展开写可能更为清晰些
+                    int out_index = j + w*(i + h*(k + c*b));
+                    float max = -FLT_MAX;
+                    int max_i = -1;
+                    // 下面两个循环回到了输入图片，计算得到的cur_h以及cur_w都是在当前层所有输入元素的索引，内外循环的目的是
+                    // 找寻输入图像中，以(h_offset + i*l.stride, w_offset + j*l.stride)为左上起点，尺寸为l.size池化区域中的
+                    //最大元素值max及其在所有输入元素中的索引max_i
+                    for(n = 0; n < l.size; ++n){
+                        for(m = 0; m < l.size; ++m){
+                            //cur_h, cur_w是在所有输入图像的第k通道的cur_h行与cur_w列，index是在所有输入图像元素中的总索引
+                            int cur_h = h_offset + i*l.stride + n;
+                            int cur_w = w_offset + j*l.stride + m;
+                            int index = cur_w + l.w*(cur_h + l.h*(k + b*l.c));
+                            // 边界检查：正常情况下，是不会越界的，但是如果有补0操作，就会越界了，这里的处理方式是直接让这些元素值为-FLT_MAX
+                            int valid = (cur_h >= 0 && cur_h < l.h &&
+                                         cur_w >= 0 && cur_w < l.w);
+                            float val = (valid != 0) ? net.input[index] : -FLT_MAX;
+                            // 记录这个池化区域中最大的元素及其在所有输入元素中的总索引
+                            max_i = (val > max) ? index : max_i;
+                            max   = (val > max) ? val   : max;
+                        }
+                    }
+                    // 由此得到最大池化层每一个输出元素值及其在所有输入元素中的总索引。
+                    // 为什么需要记录每个输出元素值对应在输入元素中的总索引呢？因为在下面的反向过程中需要用到，在计算当前最大池化层上一层网络的敏感度时，
+                    // 需要该索引明确当前层的每个元素究竟是取上一层输出（也即上前层输入）的哪一个元素的值，具体见下面backward_maxpool_layer()函数的注释。
+                    l.output[out_index] = max;
+                    l.indexes[out_index] = max_i;
+                }
+            }
+        }
+    }
+}
+```
+
+### 前向传播-Dropout层
+
+```c++
+/*
+** dropout层的前向传播函数
+** l: 当前dropout层网络
+** net: 整个网络
+** dropout层同样没有训练参数，因此前向传播比较简单，只完成一个事：按指定概率l.probability，
+** 丢弃输入元素，并将保留下来的输入元素乘以比例因子（采用的是inverted dropout，这种方式实现更为方便，
+** 且代码接口比较统一，想想看，如果采用标准的droput，则测试阶段还需要进入forward_dropout_layer()，
+** 使每个输入乘以保留概率，而使用inverted dropout，测试阶段根本就不需要进入到forward_dropout_layer）。
+*/
+void forward_dropout_layer(dropout_layer l, network net)
+{
+    int i;
+    // 如果网络当前不是出于训练阶段而是出于测试阶段，则直接返回(使用inverted dropout带来的方便)
+    if (!net.train) return;
+    // 遍历dropout层的每一个输入元素(包含整个batch)，按照指定的概率l.probability置为0或者按l.scale缩放
+    for(i = 0; i < l.batch * l.inputs; ++i){
+        // 产生一个0~1之间的均匀分布的随机数
+        float r = rand_uniform(0, 1);
+        // 每个输入元素都对应一个随机数，保存在l.rand中
+        l.rand[i] = r;
+        // 如果r小于l.probability（l.probability是舍弃概率），则舍弃该输入元素，注意，舍弃并不是删除
+        // 而是将其值置为0,所以输入元素个数总数没变（因故输出元素个数l.outputs等于l.inputs）
+        if(r < l.probability) net.input[i] = 0;
+        // 否则保留该输入元素，并乘以比例因子
+        else net.input[i] *= l.scale;
+    }
+}
+```
+
 
 
 # 参考资料
