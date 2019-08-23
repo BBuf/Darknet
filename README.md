@@ -907,6 +907,21 @@ void normalize_cpu(float *x, float *mean, float *variance, int batch, int filter
         }
     }
 }
+/*
+** axpy 是线性代数中的一种基本操作(仿射变换)完成y= alpha*x + y操作，其中x,y为矢量，alpha为实数系数，
+** 请看: https://www.jianshu.com/p/e3f386771c51
+** N: X中包含的有效元素个数
+** ALPHA: 系数alpha
+** X: 参与运算的矢量X
+** INCX: 步长(倍数步长)，即x中凡是INCX倍数编号的参与运算
+** Y: 参与运算的矢量，也相当于是输出
+*/
+void axpy_cpu(int N, float ALPHA, float *X, int INCX, float *Y, int INCY)
+{
+    int i;
+    for(i = 0; i < N; ++i) Y[i*INCY] += ALPHA*X[i*INCX];
+}
+
 void scal_cpu(int N, float ALPHA, float *X, int INCX)
 {
     int i;
@@ -917,6 +932,34 @@ void scal_cpu(int N, float ALPHA, float *X, int INCX)
 这4个函数对应了前向传播时，BN的计算4个计算公式：
 
 ![](image/17.png)
+
+BN的前向传播代码如下:
+
+```c++
+void forward_batchnorm_layer(layer l, network net)
+{
+    if(l.type == BATCHNORM) copy_cpu(l.outputs*l.batch, net.input, 1, l.output, 1);
+    copy_cpu(l.outputs*l.batch, l.output, 1, l.x, 1);
+    if(net.train){
+        mean_cpu(l.output, l.batch, l.out_c, l.out_h*l.out_w, l.mean);
+        variance_cpu(l.output, l.mean, l.batch, l.out_c, l.out_h*l.out_w, l.variance);
+
+        scal_cpu(l.out_c, .99, l.rolling_mean, 1);
+        axpy_cpu(l.out_c, .01, l.mean, 1, l.rolling_mean, 1);
+        scal_cpu(l.out_c, .99, l.rolling_variance, 1);
+        axpy_cpu(l.out_c, .01, l.variance, 1, l.rolling_variance, 1);
+
+        normalize_cpu(l.output, l.mean, l.variance, l.batch, l.out_c, l.out_h*l.out_w);   
+        copy_cpu(l.outputs*l.batch, l.output, 1, l.x_norm, 1);
+    } else {
+        normalize_cpu(l.output, l.rolling_mean, l.rolling_variance, l.batch, l.out_c, l.out_h*l.out_w);
+    }
+    scale_bias(l.output, l.scales, l.batch, l.out_c, l.out_h*l.out_w);
+    add_bias(l.output, l.biases, l.batch, l.out_c, l.out_h*l.out_w);
+}
+```
+
+这里就不多解释了，原理请看：https://blog.csdn.net/yuechuen/article/details/71502503
 
 ### 前向传播-Pooling层
 
@@ -1232,7 +1275,100 @@ void backward_convolutional_layer(convolutional_layer l, network net)
 }
 ```
 
+### 反向传播-BN层
 
+```c++
+void backward_batchnorm_layer(layer l, network net)
+{
+    if(!net.train){
+        l.mean = l.rolling_mean;
+        l.variance = l.rolling_variance;
+    }
+    backward_bias(l.bias_updates, l.delta, l.batch, l.out_c, l.out_w*l.out_h);
+    backward_scale_cpu(l.x_norm, l.delta, l.batch, l.out_c, l.out_w*l.out_h, l.scale_updates);
+
+    scale_bias(l.delta, l.scales, l.batch, l.out_c, l.out_h*l.out_w);
+
+    mean_delta_cpu(l.delta, l.variance, l.batch, l.out_c, l.out_w*l.out_h, l.mean_delta);
+    variance_delta_cpu(l.x, l.delta, l.mean, l.variance, l.batch, l.out_c, l.out_w*l.out_h, l.variance_delta);
+    normalize_delta_cpu(l.x, l.mean, l.variance, l.mean_delta, l.variance_delta, l.batch, l.out_c, l.out_w*l.out_h, l.delta);
+    if(l.type == BATCHNORM) copy_cpu(l.outputs*l.batch, l.delta, 1, net.delta, 1);
+}
+```
+
+原理还是请看：https://blog.csdn.net/yuechuen/article/details/71502503 ，就不多描述了
+
+### 反向传播-Pooling层
+
+```c++
+/*
+** 最大池化层反向传播函数
+** l: 当前最大池化层
+** net: 整个网络
+** 说明：这个函数看上去很简单，比起backward_convolutional_layer()少了很多，这都是有原因的。实际上，在darknet中，不管是什么层，
+**      其反向传播函数都会先后做两件事：1）计算当前层的敏感度图l.delta、权重更新值以及偏置更新值；2）计算上一层的敏感度图net.delta（部分计算，
+**      要完成计算得等到真正到了这一层再说）。而这里，显然没有第一步，只有第二步，而且很简单，这是为什么呢？首先回答为什么没有第一步。注意当前层l是最大池化层，
+**      最大池化层没有训练参数，说的再直白一点就是没有激活函数，或者认为激活函数就是f(x)=x，所以激活函数对于加权输入的导数其实就是1,
+**      正如在backward_convolutional_layer()注释的那样，每一层的反向传播函数的第一步是将之前（就是下一层计算得到的，注意过程是反向的）
+**      未计算完得到的l.delta乘以激活函数对加权输入的导数，以最终得到当前层的敏感度图，而对于最大池化层来说，每一个输出对于加权输入的导数值都是1,
+**      同时并没有权重及偏置这些需要训练的参数，自然不再需要第一步；对于第二步为什么会如此简单。
+*/
+void backward_maxpool_layer(const maxpool_layer l, network net)
+{
+    int i;
+    // 获取当前最大池化层l的输出尺寸h,w
+    int h = l.out_h;
+    int w = l.out_w;
+    // 获取当前层输入/输出通道数
+    int c = l.c;
+    // 计算上一层的敏感度图（未计算完全，还差一个环节，这个环节等真正反向到了那层再执行，但是其实已经完全计算了，因为池化层无参数）
+    // 循环总次数为当前层输出总元素个数（包含所有输入图片的输出，即维度为l.out_h * l.out_w * l.c * l.batch，注意此处l.c==l.out_c）
+    // 对于上一层输出中的很多元素的导数值为0,而对最大值元素，其导数值为1；再乘以当前层的敏感度图，导数值为0的还是为0,导数值为1则就等于当前层的敏感度值。
+    // 以输出图总元素个数进行遍历，刚好可以找出上一层输出中所有真正起作用（在某个池化区域中充当了最大元素值）也即敏感度值不为0的元素，而那些没有起作用的元素，
+    // 可以不用理会，保持其初始值0就可以了。
+    for(i = 0; i < h*w*c*l.batch; ++i){
+        int index = l.indexes[i];
+        // 遍历的基准是以当前层的输出元素为基准的，l.indexes记录了当前层每一个输出元素与上一层哪一个输出元素有真正联系（也即上一层对应池化核区域中最大值元素的索引），
+        // 所以index是上一层中所有输出元素的索引，且该元素在当前层某个池化域中充当了最大值元素，这个元素的敏感度值将直接传承当前层对应元素的敏感度值。 
+        // 而net.delta中，剩下没有被index按索引访问到的元素，就是那些没有真正起到作用的元素，这些元素的敏感度值为0（net.delta已经在前向时将所有元素值初始化为0）
+        // 至于为什么要用+=运算符，原因有两个，和卷积类似：一是池化核由于跨度较小，导致有重叠区域；二是batch中有多张图片，需要将所有图片的影响加起来。
+        net.delta[index] += l.delta[i];
+    }
+}
+```
+
+### 反向传播-Dropout层
+
+```c++
+/*
+** dropout层反向传播函数
+** l: 当前dropout层网络
+** net: 整个网络
+** dropout层的反向传播相对简单，因为其本身没有训练参数，也没有激活函数，或者说激活函数就为f(x) = x，也
+** 也就是激活函数关于加权输入的导数值为1,因此其自身的敏感度值已经由其下一层网络反向传播时计算完了，
+** 没有必要再乘以激活函数关于加权输入的导数了。剩下要做的就是计算上一层的敏感度图net.delta，这个计算也很简单，详见下面注释。
+*/
+void backward_dropout_layer(dropout_layer l, network net)
+{
+    int i;
+    // 如果进入backward_dropout_layer()函数，那没得说，一定是训练阶段，因为测试阶段压根就没有反向过程，只有前向过程，
+    // 所以就不再需要像forward_dropout_layer()函数中一样判断net.train是不是处于训练阶段了
+    // 如果net.delta为空，则返回（net.delta为空则说明已经反向到第一层了，此处所指第一层，是net.layers[0]，
+    // 也是与输入层直接相连的第一层隐含层，详细参见：network.c中的forward_network()函数）
+    if(!net.delta) return;
+    // 因为dropout层的输入输出元素个数相等，所以dropout层的敏感度图的维度就为l.batch*l.inputs（每一层的敏感度值与该层的输出维度一致），
+    // 以下循环遍历当前层的敏感度图，并根据l.rand的指示反向计算上一层的敏感度值，由于当前dropout层与上一层之间的连接没有权重，
+    // 或者说连接权重为0（对于舍弃的输入）或固定的l.scale（保留的输入，这个比例因子是固定的，不需要训练），所以计算过程比较简单，
+    // 只需让保留输入对应输出的敏感度值乘以l.scale，其他输入（输入是针对当前dropout层而言，实际为上一层的输出）的敏感度值直接置为0即可
+    for(i = 0; i < l.batch * l.inputs; ++i){
+        float r = l.rand[i];
+        // 与前向过程forward_dropout_layer照应，根据l.rand指示，如果r小于l.probability，说明是舍弃的输入，其敏感度值为0；
+        // 反之是保留下来的输入元素，其敏感度值为当前层对应输出的敏感度值乘以l.scale
+        if(r < l.probability) net.delta[i] = 0;
+        else net.delta[i] *= l.scale;
+    }
+}
+```
 
 
 
@@ -1245,3 +1381,5 @@ https://blog.csdn.net/u014540717/column/info/13752
 https://github.com/hgpvision/darknet
 
 https://blog.csdn.net/mrhiuser/article/details/52672824
+
+https://blog.csdn.net/yuechuen/article/details/71502503
