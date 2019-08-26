@@ -936,24 +936,32 @@ void scal_cpu(int N, float ALPHA, float *X, int INCX)
 BN的前向传播代码如下:
 
 ```c++
+// BN层的前向传播函数
 void forward_batchnorm_layer(layer l, network net)
 {
     if(l.type == BATCHNORM) copy_cpu(l.outputs*l.batch, net.input, 1, l.output, 1);
     copy_cpu(l.outputs*l.batch, l.output, 1, l.x, 1);
+    // 训练阶段
     if(net.train){
+        // blas.c中有详细注释，计算输入数据的均值，保存为l.mean
         mean_cpu(l.output, l.batch, l.out_c, l.out_h*l.out_w, l.mean);
+        // blas.c中有详细注释，计算输入数据的方差，保存为l.variance
         variance_cpu(l.output, l.mean, l.batch, l.out_c, l.out_h*l.out_w, l.variance);
-
+        
+        // 计算滑动平均和方差，影子变量，可以参考https://blog.csdn.net/just_sort/article/details/100039418
         scal_cpu(l.out_c, .99, l.rolling_mean, 1);
         axpy_cpu(l.out_c, .01, l.mean, 1, l.rolling_mean, 1);
         scal_cpu(l.out_c, .99, l.rolling_variance, 1);
         axpy_cpu(l.out_c, .01, l.variance, 1, l.rolling_variance, 1);
-
-        normalize_cpu(l.output, l.mean, l.variance, l.batch, l.out_c, l.out_h*l.out_w);   
+        // 减去均值，除以方差得到x^，论文中的第3个公式
+        normalize_cpu(l.output, l.mean, l.variance, l.batch, l.out_c, l.out_h*l.out_w);  
+        // BN层的输出
         copy_cpu(l.outputs*l.batch, l.output, 1, l.x_norm, 1);
     } else {
+        // 测试阶段，直接用滑动变量来计算输出
         normalize_cpu(l.output, l.rolling_mean, l.rolling_variance, l.batch, l.out_c, l.out_h*l.out_w);
     }
+    // 最后一个公式，对输出进行移位和偏置
     scale_bias(l.output, l.scales, l.batch, l.out_c, l.out_h*l.out_w);
     add_bias(l.output, l.biases, l.batch, l.out_c, l.out_h*l.out_w);
 }
@@ -1278,19 +1286,99 @@ void backward_convolutional_layer(convolutional_layer l, network net)
 ### 反向传播-BN层
 
 ```c++
+// 这里是对论文中最后一个公式的缩放系数求梯度更新值
+// x_norm 代表BN层前向传播的输出值
+// delta 代表上一层的梯度图
+// batch 为l.batch，即一个batch的图片数
+// n代表输出通道数，也即是输入通道数
+// size 代表w * h
+// scale_updates 代表scale的梯度更新值
+// y = gamma * x + beta
+// dy / d(gamma) = x
+void backward_scale_cpu(float *x_norm, float *delta, int batch, int n, int size, float *scale_updates)
+{
+    int i,b,f;
+    for(f = 0; f < n; ++f){
+        float sum = 0;
+        for(b = 0; b < batch; ++b){
+            for(i = 0; i < size; ++i){
+                int index = i + size*(f + n*b);
+                sum += delta[index] * x_norm[index];
+            }
+        }
+        scale_updates[f] += sum;
+    }
+}
+
+// 对均值求导
+// 对应了论文中的求导公式3，不过Darknet特殊的点在于是先计算均值的梯度
+// 这个时候方差是没有梯度的，所以公式3的后半部分为0，也就只保留了公式3的前半部分
+// 不过我从理论上无法解释这种操作会带来什么影响，但从目标检测来看应该是没有影响的
+void mean_delta_cpu(float *delta, float *variance, int batch, int filters, int spatial, float *mean_delta)
+{
+
+    int i,j,k;
+    for(i = 0; i < filters; ++i){
+        mean_delta[i] = 0;
+        for (j = 0; j < batch; ++j) {
+            for (k = 0; k < spatial; ++k) {
+                int index = j*filters*spatial + i*spatial + k;
+                mean_delta[i] += delta[index];
+            }
+        }
+        mean_delta[i] *= (-1./sqrt(variance[i] + .00001f));
+    }
+}
+// 对方差求导
+// 对应了论文中的求导公式2
+void  variance_delta_cpu(float *x, float *delta, float *mean, float *variance, int batch, int filters, int spatial, float *variance_delta)
+{
+    int i,j,k;
+    for(i = 0; i < filters; ++i){
+        variance_delta[i] = 0;
+        for(j = 0; j < batch; ++j){
+            for(k = 0; k < spatial; ++k){
+                int index = j*filters*spatial + i*spatial + k;
+                variance_delta[i] += delta[index]*(x[index] - mean[i]);
+            } 
+        }
+        variance_delta[i] *= -.5 * pow(variance[i] + .00001f, (float)(-3./2.));
+    }
+}
+// 求出BN层的梯度敏感度图
+// 对应了论文中的求导公式4，即是对x_i求导
+void normalize_delta_cpu(float *x, float *mean, float *variance, float *mean_delta, float *variance_delta, int batch, int filters, int spatial, float *delta)
+{
+    int f, j, k;
+    for(j = 0; j < batch; ++j){
+        for(f = 0; f < filters; ++f){
+            for(k = 0; k < spatial; ++k){
+                int index = j*filters*spatial + f*spatial + k;
+                delta[index] = delta[index] * 1./(sqrt(variance[f] + .00001f)) + variance_delta[f] * 2. * (x[index] - mean[f]) / (spatial * batch) + mean_delta[f]/(spatial*batch);
+            }
+        }
+    }
+}
+// BN层的反向传播函数
 void backward_batchnorm_layer(layer l, network net)
 {
+    // 如果在测试阶段，均值和方差都可以直接用滑动变量来赋值
     if(!net.train){
         l.mean = l.rolling_mean;
         l.variance = l.rolling_variance;
     }
+    // 在卷积层中定义了backward_bias，并有详细注释
     backward_bias(l.bias_updates, l.delta, l.batch, l.out_c, l.out_w*l.out_h);
+    // 这里是对论文中最后一个公式的缩放系数求梯度更新值
     backward_scale_cpu(l.x_norm, l.delta, l.batch, l.out_c, l.out_w*l.out_h, l.scale_updates);
-
+    // 也是在convlution_layer.c中定义的函数，先将敏感度图乘以l.scales
     scale_bias(l.delta, l.scales, l.batch, l.out_c, l.out_h*l.out_w);
-
+    
+    // 对应了https://blog.csdn.net/just_sort/article/details/100039418 中对均值求导数
     mean_delta_cpu(l.delta, l.variance, l.batch, l.out_c, l.out_w*l.out_h, l.mean_delta);
+    // 对应了https://blog.csdn.net/just_sort/article/details/100039418 中对方差求导数
     variance_delta_cpu(l.x, l.delta, l.mean, l.variance, l.batch, l.out_c, l.out_w*l.out_h, l.variance_delta);
+    // 计算敏感度图，对应了论文中的最后一部分
     normalize_delta_cpu(l.x, l.mean, l.variance, l.mean_delta, l.variance_delta, l.batch, l.out_c, l.out_w*l.out_h, l.delta);
     if(l.type == BATCHNORM) copy_cpu(l.outputs*l.batch, l.delta, 1, net.delta, 1);
 }
