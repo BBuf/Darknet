@@ -3,6 +3,7 @@
 #include <string.h>
 #include "option_list.h"
 #include "utils.h"
+#include "data.h"
 
 list *read_data_cfg(char *filename)
 {
@@ -12,7 +13,7 @@ list *read_data_cfg(char *filename)
     int nu = 0;
     list *options = make_list();
     while((line=fgetl(file)) != 0){
-        ++ nu;
+        ++nu;
         strip(line);
         switch(line[0]){
             case '\0':
@@ -34,18 +35,22 @@ list *read_data_cfg(char *filename)
 
 metadata get_metadata(char *file)
 {
-    metadata m = {0};
+    metadata m = { 0 };
     list *options = read_data_cfg(file);
 
     char *name_list = option_find_str(options, "names", 0);
-    if(!name_list) name_list = option_find_str(options, "labels", 0);
-    if(!name_list) {
+    if (!name_list) name_list = option_find_str(options, "labels", 0);
+    if (!name_list) {
         fprintf(stderr, "No names or labels found\n");
-    } else {
+    }
+    else {
         m.names = get_labels(name_list);
     }
     m.classes = option_find_int(options, "classes", 2);
     free_list(options);
+    if(name_list) {
+        printf("Loaded - names_list: %s, classes = %d \n", name_list, m.classes);
+    }
     return m;
 }
 
@@ -69,7 +74,7 @@ int read_option(char *s, list *options)
 
 void option_insert(list *l, char *key, char *val)
 {
-    kvp *p = malloc(sizeof(kvp));
+    kvp* p = (kvp*)xmalloc(sizeof(kvp));
     p->key = key;
     p->val = val;
     p->used = 0;
@@ -106,6 +111,13 @@ char *option_find_str(list *l, char *key, char *def)
     char *v = option_find(l, key);
     if(v) return v;
     if(def) fprintf(stderr, "%s: Using default '%s'\n", key, def);
+    return def;
+}
+
+char *option_find_str_quiet(list *l, char *key, char *def)
+{
+    char *v = option_find(l, key);
+    if (v) return v;
     return def;
 }
 

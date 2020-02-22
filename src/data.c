@@ -1,21 +1,16 @@
 #include "data.h"
 #include "utils.h"
 #include "image.h"
-#include "cuda.h"
+#include "dark_cuda.h"
+#include "box.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+#define NUMCHARS 37
 
-/*
-**  从文件filename中读取数据信息（不是具体的图像数据，只是关于数据的相关信息），存至链表返回：依次调用fgetl()->list_insert()函数
-**  输入： filename    文件名称
-**  输出： list指针，包含从文件中读取的信息
-**  调用： 比如在data.c->get_labels()调用，目的是为了从data/**.names文件中，读取所有物体类别的名称/标签信息；
-**        在train_detector()中调用，目的是从train.txt（该文件的生成参考Yolo官网）中读入所有训练图片的路径（文件中每一行就是一张图片的全路径）
-*/
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 list *get_paths(char *filename)
 {
@@ -23,7 +18,6 @@ list *get_paths(char *filename)
     FILE *file = fopen(filename, "r");
     if(!file) file_error(filename);
     list *lines = make_list();
-    //fgetl读入一整行到path，并将其插入到列表lines中
     while((path=fgetl(file))){
         list_insert(lines, path);
     }
@@ -38,7 +32,7 @@ char **get_random_paths_indexes(char **paths, int n, int m, int *indexes)
     int i;
     pthread_mutex_lock(&mutex);
     for(i = 0; i < n; ++i){
-        int index = rand()%m;
+        int index = random_gen()%m;
         indexes[i] = index;
         random_paths[i] = paths[index];
         if(i == 0) printf("%s\n", paths[index]);
@@ -48,24 +42,52 @@ char **get_random_paths_indexes(char **paths, int n, int m, int *indexes)
 }
 */
 
-/*
-** 从paths中读取n条路径信息：paths包含所有训练图片的路径，二维数组，每行对应一张图片的路径，
-** m为paths的行数，即为训练图片总数
-** 返回一个二维数组（矩阵），每行代表一张图片的路径，共n行
-*/
+char **get_sequential_paths(char **paths, int n, int m, int mini_batch, int augment_speed)
+{
+    int speed = rand_int(1, augment_speed);
+    if (speed < 1) speed = 1;
+    char** sequentia_paths = (char**)xcalloc(n, sizeof(char*));
+    int i;
+    pthread_mutex_lock(&mutex);
+    //printf("n = %d, mini_batch = %d \n", n, mini_batch);
+    unsigned int *start_time_indexes = (unsigned int *)xcalloc(mini_batch, sizeof(unsigned int));
+    for (i = 0; i < mini_batch; ++i) {
+        start_time_indexes[i] = random_gen() % m;
+        //printf(" start_time_indexes[i] = %u, ", start_time_indexes[i]);
+    }
+
+    for (i = 0; i < n; ++i) {
+        do {
+            int time_line_index = i % mini_batch;
+            unsigned int index = start_time_indexes[time_line_index] % m;
+            start_time_indexes[time_line_index] += speed;
+
+            //int index = random_gen() % m;
+            sequentia_paths[i] = paths[index];
+            //if(i == 0) printf("%s\n", paths[index]);
+            //printf(" index = %u - grp: %s \n", index, paths[index]);
+            if (strlen(sequentia_paths[i]) <= 4) printf(" Very small path to the image: %s \n", sequentia_paths[i]);
+        } while (strlen(sequentia_paths[i]) == 0);
+    }
+    free(start_time_indexes);
+    pthread_mutex_unlock(&mutex);
+    return sequentia_paths;
+}
 
 char **get_random_paths(char **paths, int n, int m)
 {
-    char **random_paths = calloc(n, sizeof(char*));
+    char** random_paths = (char**)xcalloc(n, sizeof(char*));
     int i;
-    // paths这个变量可能会被不同线程访问（读取数据本来就是多线程的），所以访问之前，先锁住，结束后解锁
     pthread_mutex_lock(&mutex);
+    //printf("n = %d \n", n);
     for(i = 0; i < n; ++i){
-        //随机产生索引：随机读入图片路径，随意读取图片的目的：举个例子：一般的训练集都是猫的图片在一起，
-		//狗的图片在一起，如果不随机读取，就是一个或者几个batch都是猫或者狗，容易过拟合同时泛化能力也差
-        int index = rand()%m;
-        random_paths[i] = paths[index];
-        //if(i == 0) printf("%s\n", paths[index]);
+        do {
+            int index = random_gen() % m;
+            random_paths[i] = paths[index];
+            //if(i == 0) printf("%s\n", paths[index]);
+            //printf("grp: %s\n", paths[index]);
+            if (strlen(random_paths[i]) <= 4) printf(" Very small path to the image: %s \n", random_paths[i]);
+        } while (strlen(random_paths[i]) == 0);
     }
     pthread_mutex_unlock(&mutex);
     return random_paths;
@@ -73,7 +95,7 @@ char **get_random_paths(char **paths, int n, int m)
 
 char **find_replace_paths(char **paths, int n, char *find, char *replace)
 {
-    char **replace_paths = calloc(n, sizeof(char*));
+    char** replace_paths = (char**)xcalloc(n, sizeof(char*));
     int i;
     for(i = 0; i < n; ++i){
         char replaced[4096];
@@ -88,7 +110,7 @@ matrix load_image_paths_gray(char **paths, int n, int w, int h)
     int i;
     matrix X;
     X.rows = n;
-    X.vals = calloc(X.rows, sizeof(float*));
+    X.vals = (float**)xcalloc(X.rows, sizeof(float*));
     X.cols = 0;
 
     for(i = 0; i < n; ++i){
@@ -109,7 +131,7 @@ matrix load_image_paths(char **paths, int n, int w, int h)
     int i;
     matrix X;
     X.rows = n;
-    X.vals = calloc(X.rows, sizeof(float*));
+    X.vals = (float**)xcalloc(X.rows, sizeof(float*));
     X.cols = 0;
 
     for(i = 0; i < n; ++i){
@@ -120,70 +142,71 @@ matrix load_image_paths(char **paths, int n, int w, int h)
     return X;
 }
 
-matrix load_image_augment_paths(char **paths, int n, int min, int max, int size, float angle, float aspect, float hue, float saturation, float exposure, int center)
+matrix load_image_augment_paths(char **paths, int n, int use_flip, int min, int max, int w, int h, float angle, float aspect, float hue, float saturation, float exposure, int dontuse_opencv)
 {
     int i;
     matrix X;
     X.rows = n;
-    X.vals = calloc(X.rows, sizeof(float*));
+    X.vals = (float**)xcalloc(X.rows, sizeof(float*));
     X.cols = 0;
 
     for(i = 0; i < n; ++i){
-        image im = load_image_color(paths[i], 0, 0);
-        image crop;
-        if(center){
-            crop = center_crop_image(im, size, size);
-        } else {
-            crop = random_augment_image(im, angle, aspect, min, max, size, size);
-        }
-        int flip = rand()%2;
-        if (flip) flip_image(crop);
+        int size = w > h ? w : h;
+        image im;
+        if(dontuse_opencv) im = load_image_stb_resize(paths[i], 0, 0, 3);
+        else im = load_image_color(paths[i], 0, 0);
+
+        image crop = random_augment_image(im, angle, aspect, min, max, size);
+        int flip = use_flip ? random_gen() % 2 : 0;
+        if (flip)
+            flip_image(crop);
         random_distort_image(crop, hue, saturation, exposure);
 
-        /*
-        show_image(im, "orig");
-        show_image(crop, "crop");
-        cvWaitKey(0);
-        */
-        //grayscale_image_3c(crop);
+        image sized = resize_image(crop, w, h);
+
+        //show_image(im, "orig");
+        //show_image(sized, "sized");
+        //show_image(sized, paths[i]);
+        //wait_until_press_key_cv();
+        //printf("w = %d, h = %d \n", sized.w, sized.h);
+
         free_image(im);
-        X.vals[i] = crop.data;
-        X.cols = crop.h*crop.w*crop.c;
+        free_image(crop);
+        X.vals[i] = sized.data;
+        X.cols = sized.h*sized.w*sized.c;
     }
     return X;
 }
 
-/*
-** 读入一张图片的所有box：一张图片可能有多个物体，每个物体都有一个矩形框框起来（物体检测不单识别类别，更包括定位），
-** 本函数就是读入一张图片的所有box信息。每个box包括5条信息，依次为：物体类别id，矩形中心点x坐标，矩形中心点y坐标，
-** 矩形框宽度w,矩形框高度h。
-** 输入： filename    标签数据所在路径（标签数据需要下载，然后调用voc_label.py生成指定的格式，具体路径视情况而定，详见darknet/yolo网页）
-**       n           该图片中的物体个数，也就是读到的矩形框个数（也是一个返回值）
-** 返回： box_label*，包含这张图片中所有的box标签信息
-*/
+extern int check_mistakes;
+
 box_label *read_boxes(char *filename, int *n)
 {
+    box_label* boxes = (box_label*)xcalloc(1, sizeof(box_label));
     FILE *file = fopen(filename, "r");
-    if(!file) file_error(filename);
+    if (!file) {
+        printf("Can't open label file. (This can be normal only if you use MSCOCO): %s \n", filename);
+        //file_error(filename);
+        FILE* fw = fopen("bad.list", "a");
+        fwrite(filename, sizeof(char), strlen(filename), fw);
+        char *new_line = "\n";
+        fwrite(new_line, sizeof(char), strlen(new_line), fw);
+        fclose(fw);
+        if (check_mistakes) getchar();
+
+        *n = 0;
+        return boxes;
+    }
     float x, y, h, w;
     int id;
     int count = 0;
-    int size = 64;
-    //新建一个标签数据box，并动态分配内存（之后，如果检测到多个矩形框标签数据，则利用realloc函数重新分配内存）
-    box_label *boxes = calloc(size, sizeof(box_label));
-    // 读入一行数据：图片检测数据文件中一行包含了一个box的信息，依次为id,x,y,w,h
     while(fscanf(file, "%d %f %f %f %f", &id, &x, &y, &w, &h) == 5){
-        //根据box个数重新分配内存:分配count+1个box_label的内存
-        if(count == size) {
-            size = size * 2;
-            boxes = realloc(boxes, size*sizeof(box_label));
-        }
+        boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
         boxes[count].id = id;
         boxes[count].x = x;
         boxes[count].y = y;
         boxes[count].h = h;
         boxes[count].w = w;
-        //通过x,y,w,h计算矩形框4个角点的最小最大x,y坐标
         boxes[count].left   = x - w/2;
         boxes[count].right  = x + w/2;
         boxes[count].top    = y - h/2;
@@ -195,44 +218,21 @@ box_label *read_boxes(char *filename, int *n)
     return boxes;
 }
 
-//随机打乱一张照片中所有box的索引编号
 void randomize_boxes(box_label *b, int n)
 {
     int i;
     for(i = 0; i < n; ++i){
-        //通过随机交换值来打乱box在box集合中的索引编号
         box_label swap = b[i];
-        //生成0~n-1之间的索引号
-        int index = rand()%n;
+        int index = random_gen()%n;
         b[i] = b[index];
         b[index] = swap;
     }
 }
 
-/*
-** 矫正矩形框标签数据在标准化尺寸图片中的值：输入的图片，经过place_image()函数对图片尺寸进行规范化以及数据增强后,
-** 尺寸发生了变化，由于矩形框的x,y,w,h（分别为矩形中心点坐标，矩形宽高）都是相对于原始图片宽高的比例值，所以，
-** 如果仅对原始图片进行缩放（等比例也好，不等比例也好），是不会改变x,y,w,h等值的，也就是中间图与原始图矩形框的x,y,w,h值是一样的，但关键在于，在函数place_image()中，
-** 不单涉及缩放操作，还涉及平移操作，place_image()函数的最后一步是将中间图随机的嵌入到最终输出图上，因为这一步，
-** 就彻底改变了x,y,w,h的值，为了计算新的x,y,w,h值，很简单，先按原来的值乘以中间图的宽高，得到矩形框四个角点的真实坐标，
-** 而后进行平移，统一除以最终输出图的宽高，得到新的x,y,w,h值。
-** 除此之外，左右翻转也会导致x,y,w,h值的变化。
-** 输出： boxes     一张图片中包含的所有矩形框标签数据
-**       n         一张图片中包含的矩形框个素
-**       dx        place_image()函数中，中间图相对于最终输出图canvas的起点的x坐标，用占比表示（或者说x方向上的偏移坐标），正值表示中间图嵌入到最终输出图中，负值表示输出图是中间图的一个mask
-**       dy        place_image()函数中，中间图相对于最终输出图canvas的起点的y坐标，用占比表示（或者说y方向上的偏移坐标），正值表示中间图嵌入到最终输出图中，负值表示输出图是中间图的一个mask
-**       sx        nw/w，place_image()函数中中间图宽度与最终输出图宽度的比值
-**       sy        nw/w，place_image()函数中中间图高度与最终输出图高度的比值
-**       flip      是否进行了翻转操作，在load_data_detection()中，为了进行数据增强，还可能进行了翻转操作
-*/
 void correct_boxes(box_label *boxes, int n, float dx, float dy, float sx, float sy, int flip)
 {
     int i;
-    //遍历并依次矫正每个矩形标签数据
     for(i = 0; i < n; ++i){
-        // x,y是矩形框中心点的坐标，因此，二者不可能为0（为0的话，说明矩形框宽高只能为0,相当于不存在这个矩形框或者物体），
-        // 要搞清一个概念，最初的矩形框的x,y,w,h是相对于输入的训练图片的宽高比例值，因此矩形框必须在图片内，就算有一个物体，图片没有照全，
-        // 那么给的矩形框也必须是图片内的矩形框，这时矩形框只覆盖物体的部分内容，总之不可能出现矩形框中心坐标为(0,0)（或者为负）的情况。
         if(boxes[i].x == 0 && boxes[i].y == 0) {
             boxes[i].x = 999999;
             boxes[i].y = 999999;
@@ -240,47 +240,45 @@ void correct_boxes(box_label *boxes, int n, float dx, float dy, float sx, float 
             boxes[i].h = 999999;
             continue;
         }
-        // sx = nw / w, dx = -dx / w, (boxes[i].left  * nw + dx) / w括号内为在原矩形框在中间图中真实的长度，除以w即可得新的x值，
-        // 其他几个参数也一样，思路都是先获取在中间图中的绝对坐标，然后除以最终输出图的尺寸即可得到矩形框四个角点相对输出图的坐标（占比）
-        // 此函数需要与load_data_detection()函数中调用的place_image()函数一起看。
-        // 要注意的是，这里首先获取的是在中间图中的绝对坐标，不是原始输入图的，因为place_image()函数最后一步，是将
-        // 中间图嵌入到最终输出图中，因此，已经与原始输入图没有关系了。
+        if ((boxes[i].x + boxes[i].w / 2) < 0 || (boxes[i].y + boxes[i].h / 2) < 0 ||
+            (boxes[i].x - boxes[i].w / 2) > 1 || (boxes[i].y - boxes[i].h / 2) > 1)
+        {
+            boxes[i].x = 999999;
+            boxes[i].y = 999999;
+            boxes[i].w = 999999;
+            boxes[i].h = 999999;
+            continue;
+        }
         boxes[i].left   = boxes[i].left  * sx - dx;
         boxes[i].right  = boxes[i].right * sx - dx;
         boxes[i].top    = boxes[i].top   * sy - dy;
         boxes[i].bottom = boxes[i].bottom* sy - dy;
-        // 如果load_data_detection()函数中还对最终输出图进行了左右翻转，那么相应的矩形框的位置也有改动
+
         if(flip){
-            // 左右翻转，就是交换一下值就可以了（因为这里都使用占比来表示坐标值，所以用1相减）
             float swap = boxes[i].left;
             boxes[i].left = 1. - boxes[i].right;
             boxes[i].right = 1. - swap;
         }
-        // 将矩形框的四个角点坐标严格限制在0~1之间（超出边界值的直接置为边界值）
+
         boxes[i].left =  constrain(0, 1, boxes[i].left);
         boxes[i].right = constrain(0, 1, boxes[i].right);
         boxes[i].top =   constrain(0, 1, boxes[i].top);
         boxes[i].bottom =   constrain(0, 1, boxes[i].bottom);
-        // 计算矩形框新的中心点坐标以及宽高
+
         boxes[i].x = (boxes[i].left+boxes[i].right)/2;
         boxes[i].y = (boxes[i].top+boxes[i].bottom)/2;
         boxes[i].w = (boxes[i].right - boxes[i].left);
         boxes[i].h = (boxes[i].bottom - boxes[i].top);
-        // 严格限制新的矩形框宽高在0~1之间
+
         boxes[i].w = constrain(0, 1, boxes[i].w);
         boxes[i].h = constrain(0, 1, boxes[i].h);
     }
 }
 
-
 void fill_truth_swag(char *path, float *truth, int classes, int flip, float dx, float dy, float sx, float sy)
 {
     char labelpath[4096];
-    find_replace(path, "images", "labels", labelpath);
-    find_replace(labelpath, "JPEGImages", "labels", labelpath);
-    find_replace(labelpath, ".jpg", ".txt", labelpath);
-    find_replace(labelpath, ".JPG", ".txt", labelpath);
-    find_replace(labelpath, ".JPEG", ".txt", labelpath);
+    replace_image_to_label(path, labelpath);
 
     int count = 0;
     box_label *boxes = read_boxes(labelpath, &count);
@@ -290,7 +288,7 @@ void fill_truth_swag(char *path, float *truth, int classes, int flip, float dx, 
     int id;
     int i;
 
-    for (i = 0; i < count && i < 90; ++i) {
+    for (i = 0; i < count && i < 30; ++i) {
         x =  boxes[i].x;
         y =  boxes[i].y;
         w =  boxes[i].w;
@@ -314,13 +312,8 @@ void fill_truth_swag(char *path, float *truth, int classes, int flip, float dx, 
 void fill_truth_region(char *path, float *truth, int classes, int num_boxes, int flip, float dx, float dy, float sx, float sy)
 {
     char labelpath[4096];
-    find_replace(path, "images", "labels", labelpath);
-    find_replace(labelpath, "JPEGImages", "labels", labelpath);
+    replace_image_to_label(path, labelpath);
 
-    find_replace(labelpath, ".jpg", ".txt", labelpath);
-    find_replace(labelpath, ".png", ".txt", labelpath);
-    find_replace(labelpath, ".JPG", ".txt", labelpath);
-    find_replace(labelpath, ".JPEG", ".txt", labelpath);
     int count = 0;
     box_label *boxes = read_boxes(labelpath, &count);
     randomize_boxes(boxes, count);
@@ -328,7 +321,7 @@ void fill_truth_region(char *path, float *truth, int classes, int num_boxes, int
     float x,y,w,h;
     int id;
     int i;
-    
+
     for (i = 0; i < count; ++i) {
         x =  boxes[i].x;
         y =  boxes[i].y;
@@ -336,7 +329,7 @@ void fill_truth_region(char *path, float *truth, int classes, int num_boxes, int
         h =  boxes[i].h;
         id = boxes[i].id;
 
-        if (w < .005 || h < .005) continue;
+        if (w < .001 || h < .001) continue;
 
         int col = (int)(x*num_boxes);
         int row = (int)(y*num_boxes);
@@ -359,226 +352,97 @@ void fill_truth_region(char *path, float *truth, int classes, int num_boxes, int
     free(boxes);
 }
 
-void load_rle(image im, int *rle, int n)
+int fill_truth_detection(const char *path, int num_boxes, float *truth, int classes, int flip, float dx, float dy, float sx, float sy,
+    int net_w, int net_h)
 {
-    int count = 0;
-    int curr = 0;
-    int i,j;
-    for(i = 0; i < n; ++i){
-        for(j = 0; j < rle[i]; ++j){
-            im.data[count++] = curr;
-        }
-        curr = 1 - curr;
-    }
-    for(; count < im.h*im.w*im.c; ++count){
-        im.data[count] = curr;
-    }
-}
+    char labelpath[4096];
+    replace_image_to_label(path, labelpath);
 
-void or_image(image src, image dest, int c)
-{
+    int count = 0;
     int i;
-    for(i = 0; i < src.w*src.h; ++i){
-        if(src.data[i]) dest.data[dest.w*dest.h*c + i] = 1;
-    }
-}
-
-void exclusive_image(image src)
-{
-    int k, j, i;
-    int s = src.w*src.h;
-    for(k = 0; k < src.c-1; ++k){
-        for(i = 0; i < s; ++i){
-            if (src.data[k*s + i]){
-                for(j = k+1; j < src.c; ++j){
-                    src.data[j*s + i] = 0;
-                }
-            }
-        }
-    }
-}
-
-box bound_image(image im)
-{
-    int x,y;
-    int minx = im.w;
-    int miny = im.h;
-    int maxx = 0;
-    int maxy = 0;
-    for(y = 0; y < im.h; ++y){
-        for(x = 0; x < im.w; ++x){
-            if(im.data[y*im.w + x]){
-                minx = (x < minx) ? x : minx;
-                miny = (y < miny) ? y : miny;
-                maxx = (x > maxx) ? x : maxx;
-                maxy = (y > maxy) ? y : maxy;
-            }
-        }
-    }
-    box b = {minx, miny, maxx-minx + 1, maxy-miny + 1};
-    //printf("%f %f %f %f\n", b.x, b.y, b.w, b.h);
-    return b;
-}
-
-void fill_truth_iseg(char *path, int num_boxes, float *truth, int classes, int w, int h, augment_args aug, int flip, int mw, int mh)
-{
-    char labelpath[4096];
-    find_replace(path, "images", "mask", labelpath);
-    find_replace(labelpath, "JPEGImages", "mask", labelpath);
-    find_replace(labelpath, ".jpg", ".txt", labelpath);
-    find_replace(labelpath, ".JPG", ".txt", labelpath);
-    find_replace(labelpath, ".JPEG", ".txt", labelpath);
-    FILE *file = fopen(labelpath, "r");
-    if(!file) file_error(labelpath);
-    char buff[32788];
-    int id;
-    int i = 0;
-    int j;
-    image part = make_image(w, h, 1);
-    while((fscanf(file, "%d %s", &id, buff) == 2) && i < num_boxes){
-        int n = 0;
-        int *rle = read_intlist(buff, &n, 0);
-        load_rle(part, rle, n);
-        image sized = rotate_crop_image(part, aug.rad, aug.scale, aug.w, aug.h, aug.dx, aug.dy, aug.aspect);
-        if(flip) flip_image(sized);
-
-        image mask = resize_image(sized, mw, mh);
-        truth[i*(mw*mh+1)] = id;
-        for(j = 0; j < mw*mh; ++j){
-            truth[i*(mw*mh + 1) + 1 + j] = mask.data[j];
-        }
-        ++i;
-
-        free_image(mask);
-        free_image(sized);
-        free(rle);
-    }
-    if(i < num_boxes) truth[i*(mw*mh+1)] = -1;
-    fclose(file);
-    free_image(part);
-}
-
-void fill_truth_mask(char *path, int num_boxes, float *truth, int classes, int w, int h, augment_args aug, int flip, int mw, int mh)
-{
-    char labelpath[4096];
-    find_replace(path, "images", "mask", labelpath);
-    find_replace(labelpath, "JPEGImages", "mask", labelpath);
-    find_replace(labelpath, ".jpg", ".txt", labelpath);
-    find_replace(labelpath, ".JPG", ".txt", labelpath);
-    find_replace(labelpath, ".JPEG", ".txt", labelpath);
-    FILE *file = fopen(labelpath, "r");
-    if(!file) file_error(labelpath);
-    char buff[32788];
-    int id;
-    int i = 0;
-    image part = make_image(w, h, 1);
-    while((fscanf(file, "%d %s", &id, buff) == 2) && i < num_boxes){
-        int n = 0;
-        int *rle = read_intlist(buff, &n, 0);
-        load_rle(part, rle, n);
-        image sized = rotate_crop_image(part, aug.rad, aug.scale, aug.w, aug.h, aug.dx, aug.dy, aug.aspect);
-        if(flip) flip_image(sized);
-        box b = bound_image(sized);
-        if(b.w > 0){
-            image crop = crop_image(sized, b.x, b.y, b.w, b.h);
-            image mask = resize_image(crop, mw, mh);
-            truth[i*(4 + mw*mh + 1) + 0] = (b.x + b.w/2.)/sized.w;
-            truth[i*(4 + mw*mh + 1) + 1] = (b.y + b.h/2.)/sized.h;
-            truth[i*(4 + mw*mh + 1) + 2] = b.w/sized.w;
-            truth[i*(4 + mw*mh + 1) + 3] = b.h/sized.h;
-            int j;
-            for(j = 0; j < mw*mh; ++j){
-                truth[i*(4 + mw*mh + 1) + 4 + j] = mask.data[j];
-            }
-            truth[i*(4 + mw*mh + 1) + 4 + mw*mh] = id;
-            free_image(crop);
-            free_image(mask);
-            ++i;
-        }
-        free_image(sized);
-        free(rle);
-    }
-    fclose(file);
-    free_image(part);
-}
-
-/*
-** 用来获取一张图的真实标签信息，对于图像检测，标签信息包括物体的类别（用类别id表示）以及定位信息，定位用矩形框来表示，包含矩形中心点坐标x,y以及宽高w,h，
-** 本函数读入一张图片中所有标签信息（一张图片可能存在多个物体，每个物体都含有一条类别信息以及一个矩形框信息）
-** 输入： path     一张图片所在路径，字符数组
-**       num_boxes 每张图片允许处理的最大的矩形框数（如果图片中包含的矩形框大于num_boxes，那么不管，随机取其中num_boxes个参与训练）
-**       truth    存储一张图片包含的所有真实信息（标签信息），相当于返回值，对于检测而言，主要包括物体类别以及定位（矩形框）信息，
-**                truth是一个一维数组，每张矩形框有5条信息，因此truth中每5个数对应一个矩形框数据
-**       classes  本函数并未使用该参数
-**       flip     图片在之前读入时（比如在load_data_detection函数中）是否进行过了左右翻转
-**       dx       此参数需要参考load_data_detection函数中的注释，dx是中间图相对最终图的起点位置的x坐标除以最终图的宽度（并取负值）
-**       dy       此参数需要参考load_data_detection函数中的注释，dy是中间图相对最终图的起点位置的x坐标除以最终图的高度（并取负值）
-**       sx       此参数需要参考load_data_detection函数中的注释，sx是中间图宽度与最终图宽度的比值
-**       sy       此参数需要参考load_data_detection函数中的注释，sy是中间图高度与最终图高度的比值
-** 说明： 后面五个参数，用来矫正矩形框的信息，因为在此函数之前，对输入图片进行了缩放、平移、左右翻转一系列的数据增强操作，这些操作不会改变物体的类别信息，
-**       但会改变物体的位置信息，也即矩形框信息，需要进行矫正，这些参数的具体含义上面可能未说清，具体可参看本函数内部调用的correct_boxes()函数的用法
-*/
-void fill_truth_detection(char *path, int num_boxes, float *truth, int classes, int flip, float dx, float dy, float sx, float sy)
-{
-    // 定义一个数组，分配4096个字符（字节）内存，用以存放本图片标签信息文件所在路径
-    char labelpath[4096];
-    // // 下面一连串地调用find_replace()函数，是为了得到每张训练图片的标签数据（.txt文件）所在路径
-    // 通过调用find_replace()函数，对每张图片的绝对路径进行修改，得到对应的标签数据所在路径。
-    // 比如，图片的路径为：/home/zxy/Downloads/darknet_dataset/VOCdevkit/VOC2007/JPEGImages/000001.jpg，
-    // 通过连续调用find_place()函数，最终可以得到对应的标签数据路径labelpath为：
-    // /home/zxy/Downloads/darknet_dataset/VOCdevkit/VOC2007/labels/000001.txt
-    // 注意，下面共调用了7次find_replace函数，可以分为两部分，第一部分是将图片的文件夹名字替换为labels，
-    // 图片的路径可能为JPEGImages,images或raw中的一种，所以调用了三次以应对多种情况，实际只有一次调用真正有效;
-    // 第二部分是将修改后缀，图片的格式有可能为jpg,png,JPG,JPEG四种中的一种，不管是哪种，
-    // 最终替换成标签数据格式，即.txt格式，因此，此处也是为了应对可能的四种情况，才四次调用了find_replace，实际起作用的只有一次调用。
-    //这里的images,JPEGImages，raw是不同的数据集中存储训练图片的文件夹
-    find_replace(path, "images", "labels", labelpath);
-    find_replace(labelpath, "JPEGImages", "labels", labelpath);
-
-    find_replace(labelpath, "raw", "labels", labelpath);
-    find_replace(labelpath, ".jpg", ".txt", labelpath);
-    find_replace(labelpath, ".png", ".txt", labelpath);
-    find_replace(labelpath, ".JPG", ".txt", labelpath);
-    find_replace(labelpath, ".JPEG", ".txt", labelpath);
-    int count = 0;
-    //// 读入一张图片的所有box标签信息，count为读到的box个数
     box_label *boxes = read_boxes(labelpath, &count);
-    // 随机打乱一张照片中所有box的索引编号
+    int min_w_h = 0;
+    float lowest_w = 1.F / net_w;
+    float lowest_h = 1.F / net_h;
     randomize_boxes(boxes, count);
-    //从输入的原始图片，到真正给神经网络用的图片，可能经过了平移，随机截取，左右翻转等数据增强操作，这些操作，都会改变矩形框的值，需要进行矫正
     correct_boxes(boxes, count, dx, dy, sx, sy, flip);
-    // 如果图片中含有的矩形框数多于num_boxes，则保持count = num_boxes，因为num_boxes是指定的每张图片最多参与训练的矩形框数，如果超过这个数，
-    // 就在其中随机选择num_boxes个（box的顺序已经随机打乱了）
-    if(count > num_boxes) count = num_boxes;
-    float x,y,w,h;
+    if (count > num_boxes) count = num_boxes;
+    float x, y, w, h;
     int id;
-    int i;
     int sub = 0;
-    // 提取count个矩形框信息
+
     for (i = 0; i < count; ++i) {
-        x =  boxes[i].x;
-        y =  boxes[i].y;
-        w =  boxes[i].w;
-        h =  boxes[i].h;
-        // 物体的类别并不是用字符串来表示，而是用物体类别对应的id来表示，如对于VOC数据集，共有20类物体，那么对应的id编号为从0~19号
+        x = boxes[i].x;
+        y = boxes[i].y;
+        w = boxes[i].w;
+        h = boxes[i].h;
         id = boxes[i].id;
-        // 矩形框大小下限：如果长宽小于0.001（矩形框的长宽不到图片长宽的0.001）认为没有包含物体
-        if ((w < .001 || h < .001)) {
+
+        // not detect small objects
+        //if ((w < 0.001F || h < 0.001F)) continue;
+        // if truth (box for object) is smaller than 1x1 pix
+        char buff[256];
+        if (id >= classes) {
+            printf("\n Wrong annotation: class_id = %d. But class_id should be [from 0 to %d], file: %s \n", id, (classes-1), labelpath);
+            sprintf(buff, "echo %s \"Wrong annotation: class_id = %d. But class_id should be [from 0 to %d]\" >> bad_label.list", labelpath, id, (classes-1));
+            system(buff);
+            getchar();
             ++sub;
             continue;
         }
-        // 最后将矩形框信息赋给truth
+        if ((w < lowest_w || h < lowest_h)) {
+            //sprintf(buff, "echo %s \"Very small object: w < lowest_w OR h < lowest_h\" >> bad_label.list", labelpath);
+            //system(buff);
+            ++sub;
+            continue;
+        }
+        if (x == 999999 || y == 999999) {
+            printf("\n Wrong annotation: x = 0, y = 0, < 0 or > 1, file: %s \n", labelpath);
+            sprintf(buff, "echo %s \"Wrong annotation: x = 0 or y = 0\" >> bad_label.list", labelpath);
+            system(buff);
+            ++sub;
+            if (check_mistakes) getchar();
+            continue;
+        }
+        if (x <= 0 || x > 1 || y <= 0 || y > 1) {
+            printf("\n Wrong annotation: x = %f, y = %f, file: %s \n", x, y, labelpath);
+            sprintf(buff, "echo %s \"Wrong annotation: x = %f, y = %f\" >> bad_label.list", labelpath, x, y);
+            system(buff);
+            ++sub;
+            if (check_mistakes) getchar();
+            continue;
+        }
+        if (w > 1) {
+            printf("\n Wrong annotation: w = %f, file: %s \n", w, labelpath);
+            sprintf(buff, "echo %s \"Wrong annotation: w = %f\" >> bad_label.list", labelpath, w);
+            system(buff);
+            w = 1;
+            if (check_mistakes) getchar();
+        }
+        if (h > 1) {
+            printf("\n Wrong annotation: h = %f, file: %s \n", h, labelpath);
+            sprintf(buff, "echo %s \"Wrong annotation: h = %f\" >> bad_label.list", labelpath, h);
+            system(buff);
+            h = 1;
+            if (check_mistakes) getchar();
+        }
+        if (x == 0) x += lowest_w;
+        if (y == 0) y += lowest_h;
+
         truth[(i-sub)*5+0] = x;
         truth[(i-sub)*5+1] = y;
         truth[(i-sub)*5+2] = w;
         truth[(i-sub)*5+3] = h;
         truth[(i-sub)*5+4] = id;
+
+        if (min_w_h == 0) min_w_h = w*net_w;
+        if (min_w_h > w*net_w) min_w_h = w*net_w;
+        if (min_w_h > h*net_h) min_w_h = h*net_h;
     }
-    // 所有矩形框的信息已经提取，及时释放堆内存
     free(boxes);
+    return min_w_h;
 }
 
-#define NUMCHARS 37
 
 void print_letters(float *pred, int n)
 {
@@ -641,10 +505,44 @@ void fill_truth(char *path, char **labels, int k, float *truth)
         if(strstr(path, labels[i])){
             truth[i] = 1;
             ++count;
-            //printf("%s %s %d\n", path, labels[i], i);
         }
     }
-    if(count != 1 && (k != 1 || count != 0)) printf("Too many or too few labels: %d, %s\n", count, path);
+    if (count != 1) {
+        printf("Too many or too few labels: %d, %s\n", count, path);
+        count = 0;
+        for (i = 0; i < k; ++i) {
+            if (strstr(path, labels[i])) {
+                printf("\t label %d: %s  \n", count, labels[i]);
+                count++;
+            }
+        }
+    }
+}
+
+void fill_truth_smooth(char *path, char **labels, int k, float *truth, float label_smooth_eps)
+{
+    int i;
+    memset(truth, 0, k * sizeof(float));
+    int count = 0;
+    for (i = 0; i < k; ++i) {
+        if (strstr(path, labels[i])) {
+            truth[i] = (1 - label_smooth_eps);
+            ++count;
+        }
+        else {
+            truth[i] = label_smooth_eps / (k - 1);
+        }
+    }
+    if (count != 1) {
+        printf("Too many or too few labels: %d, %s\n", count, path);
+        count = 0;
+        for (i = 0; i < k; ++i) {
+            if (strstr(path, labels[i])) {
+                printf("\t label %d: %s  \n", count, labels[i]);
+                count++;
+            }
+        }
+    }
 }
 
 void fill_hierarchy(float *truth, int k, tree *hierarchy)
@@ -679,42 +577,12 @@ void fill_hierarchy(float *truth, int k, tree *hierarchy)
     }
 }
 
-matrix load_regression_labels_paths(char **paths, int n, int k)
-{
-    matrix y = make_matrix(n, k);
-    int i,j;
-    for(i = 0; i < n; ++i){
-        char labelpath[4096];
-        find_replace(paths[i], "images", "labels", labelpath);
-        find_replace(labelpath, "JPEGImages", "labels", labelpath);
-        find_replace(labelpath, ".BMP", ".txt", labelpath);
-        find_replace(labelpath, ".JPEG", ".txt", labelpath);
-        find_replace(labelpath, ".JPG", ".txt", labelpath);
-        find_replace(labelpath, ".JPeG", ".txt", labelpath);
-        find_replace(labelpath, ".Jpeg", ".txt", labelpath);
-        find_replace(labelpath, ".PNG", ".txt", labelpath);
-        find_replace(labelpath, ".TIF", ".txt", labelpath);
-        find_replace(labelpath, ".bmp", ".txt", labelpath);
-        find_replace(labelpath, ".jpeg", ".txt", labelpath);
-        find_replace(labelpath, ".jpg", ".txt", labelpath);
-        find_replace(labelpath, ".png", ".txt", labelpath);
-        find_replace(labelpath, ".tif", ".txt", labelpath);
-
-        FILE *file = fopen(labelpath, "r");
-        for(j = 0; j < k; ++j){
-            fscanf(file, "%f", &(y.vals[i][j]));
-        }
-        fclose(file);
-    }
-    return y;
-}
-
-matrix load_labels_paths(char **paths, int n, char **labels, int k, tree *hierarchy)
+matrix load_labels_paths(char **paths, int n, char **labels, int k, tree *hierarchy, float label_smooth_eps)
 {
     matrix y = make_matrix(n, k);
     int i;
     for(i = 0; i < n && labels; ++i){
-        fill_truth(paths[i], labels, k, y.vals[i]);
+        fill_truth_smooth(paths[i], labels, k, y.vals[i], label_smooth_eps);
         if(hierarchy){
             fill_hierarchy(y.vals[i], k, hierarchy);
         }
@@ -726,14 +594,18 @@ matrix load_tags_paths(char **paths, int n, int k)
 {
     matrix y = make_matrix(n, k);
     int i;
-    //int count = 0;
+    int count = 0;
     for(i = 0; i < n; ++i){
         char label[4096];
-        find_replace(paths[i], "images", "labels", label);
-        find_replace(label, ".jpg", ".txt", label);
+        find_replace(paths[i], "imgs", "labels", label);
+        find_replace(label, "_iconl.jpeg", ".txt", label);
         FILE *file = fopen(label, "r");
-        if (!file) continue;
-        //++count;
+        if(!file){
+            find_replace(label, "labels", "labels2", label);
+            file = fopen(label, "r");
+            if(!file) continue;
+        }
+        ++count;
         int tag;
         while(fscanf(file, "%d", &tag) == 1){
             if(tag < k){
@@ -742,238 +614,33 @@ matrix load_tags_paths(char **paths, int n, int k)
         }
         fclose(file);
     }
-    //printf("%d/%d\n", count, n);
+    printf("%d/%d\n", count, n);
     return y;
 }
 
-/*
-** 首先调用get_apths()从filename中读取数据到list变量中，而后调用list_to_array()转存自二维数组返回
-** 输入filename 文件路径
-** 返回: char**类型，包含从文件中读取的所有信息（该函数只用于读入名称/标签信息，即读取data/**.names文件的信息）
-** 调用: 该函数在detector.c->test_detector()函数中调用，目的正如函数名，从文件中读取数据集中所有类别的名称/标签信息
-*/
-char **get_labels(char *filename)
+char **get_labels_custom(char *filename, int *size)
 {
-    // 从包含数据集中所有物体类别信息的文件（data/**.names文件）中读取所有物体类别信息，存入链表plist中
     list *plist = get_paths(filename);
-    // 将所用数据集的所有类别信息（即包含所有类别的名称/标签信息）从plist中提取出来，存至二维字符数组labels中
-    // labels将包含数据集中所有类别信息，比如使用coco.data，里面包含80类物体，有person, bicycle等等
+    if(size) *size = plist->size;
     char **labels = (char **)list_to_array(plist);
-    // 将指针复制给labels之后，就可以释放plist了，不会影响labels的
     free_list(plist);
     return labels;
 }
 
-/*
-** 释放数据d的堆内存
-** 说明： 该函数输入虽然是data类型数据，但实际上是释放data结构体中matrix类型元素X,y的vals的堆内存（有两层深度），
-** 分两种情况，浅层释放与深层释放，决定于d的标志位shallow的取值，shallow=1表示浅层释放，
-** shallow=0表示深层释放，关于浅层与深层释放，见data结构体定义处的注释，此不再赘述。
-** 什么时候需浅层释放呢？当不想删除二维数组的数据，只想清除第一层指针存储的第二层指针变量时，
-** 采用浅层释放，在释放前，二维数组的数据应当转移，使得另有指针可以访问这些保留的数据；
-** 而当不想要保留任何数据时，采用深层释放。
-*/
+char **get_labels(char *filename)
+{
+    return get_labels_custom(filename, NULL);
+}
+
 void free_data(data d)
 {
     if(!d.shallow){
-        // 深层释放堆内存（注意虽然输入是d.X,d.y，但不是直接释放d.X，d.y，这二者在data结构体中根本连指针都不算。
-        // 在free_matrix()中是逐行释放d.X.vals和d.y.vals的内存，再直接释放d.X.vals和d.y.vals）
         free_matrix(d.X);
         free_matrix(d.y);
     }else{
-        // 浅层释放堆内存
         free(d.X.vals);
         free(d.y.vals);
     }
-}
-
-image get_segmentation_image(char *path, int w, int h, int classes)
-{
-    char labelpath[4096];
-    find_replace(path, "images", "mask", labelpath);
-    find_replace(labelpath, "JPEGImages", "mask", labelpath);
-    find_replace(labelpath, ".jpg", ".txt", labelpath);
-    find_replace(labelpath, ".JPG", ".txt", labelpath);
-    find_replace(labelpath, ".JPEG", ".txt", labelpath);
-    image mask = make_image(w, h, classes);
-    FILE *file = fopen(labelpath, "r");
-    if(!file) file_error(labelpath);
-    char buff[32788];
-    int id;
-    image part = make_image(w, h, 1);
-    while(fscanf(file, "%d %s", &id, buff) == 2){
-        int n = 0;
-        int *rle = read_intlist(buff, &n, 0);
-        load_rle(part, rle, n);
-        or_image(part, mask, id);
-        free(rle);
-    }
-    //exclusive_image(mask);
-    fclose(file);
-    free_image(part);
-    return mask;
-}
-
-image get_segmentation_image2(char *path, int w, int h, int classes)
-{
-    char labelpath[4096];
-    find_replace(path, "images", "mask", labelpath);
-    find_replace(labelpath, "JPEGImages", "mask", labelpath);
-    find_replace(labelpath, ".jpg", ".txt", labelpath);
-    find_replace(labelpath, ".JPG", ".txt", labelpath);
-    find_replace(labelpath, ".JPEG", ".txt", labelpath);
-    image mask = make_image(w, h, classes+1);
-    int i;
-    for(i = 0; i < w*h; ++i){
-        mask.data[w*h*classes + i] = 1;
-    }
-    FILE *file = fopen(labelpath, "r");
-    if(!file) file_error(labelpath);
-    char buff[32788];
-    int id;
-    image part = make_image(w, h, 1);
-    while(fscanf(file, "%d %s", &id, buff) == 2){
-        int n = 0;
-        int *rle = read_intlist(buff, &n, 0);
-        load_rle(part, rle, n);
-        or_image(part, mask, id);
-        for(i = 0; i < w*h; ++i){
-            if(part.data[i]) mask.data[w*h*classes + i] = 0;
-        }
-        free(rle);
-    }
-    //exclusive_image(mask);
-    fclose(file);
-    free_image(part);
-    return mask;
-}
-
-data load_data_seg(int n, char **paths, int m, int w, int h, int classes, int min, int max, float angle, float aspect, float hue, float saturation, float exposure, int div)
-{
-    char **random_paths = get_random_paths(paths, n, m);
-    int i;
-    data d = {0};
-    d.shallow = 0;
-
-    d.X.rows = n;
-    d.X.vals = calloc(d.X.rows, sizeof(float*));
-    d.X.cols = h*w*3;
-
-
-    d.y.rows = n;
-    d.y.cols = h*w*classes/div/div;
-    d.y.vals = calloc(d.X.rows, sizeof(float*));
-
-    for(i = 0; i < n; ++i){
-        image orig = load_image_color(random_paths[i], 0, 0);
-        augment_args a = random_augment_args(orig, angle, aspect, min, max, w, h);
-        image sized = rotate_crop_image(orig, a.rad, a.scale, a.w, a.h, a.dx, a.dy, a.aspect);
-
-        int flip = rand()%2;
-        if(flip) flip_image(sized);
-        random_distort_image(sized, hue, saturation, exposure);
-        d.X.vals[i] = sized.data;
-
-        image mask = get_segmentation_image(random_paths[i], orig.w, orig.h, classes);
-        //image mask = make_image(orig.w, orig.h, classes+1);
-        image sized_m = rotate_crop_image(mask, a.rad, a.scale/div, a.w/div, a.h/div, a.dx/div, a.dy/div, a.aspect);
-
-        if(flip) flip_image(sized_m);
-        d.y.vals[i] = sized_m.data;
-
-        free_image(orig);
-        free_image(mask);
-
-        /*
-           image rgb = mask_to_rgb(sized_m, classes);
-           show_image(rgb, "part");
-           show_image(sized, "orig");
-           cvWaitKey(0);
-           free_image(rgb);
-         */
-    }
-    free(random_paths);
-    return d;
-}
-
-data load_data_iseg(int n, char **paths, int m, int w, int h, int classes, int boxes, int div, int min, int max, float angle, float aspect, float hue, float saturation, float exposure)
-{
-    char **random_paths = get_random_paths(paths, n, m);
-    int i;
-    data d = {0};
-    d.shallow = 0;
-
-    d.X.rows = n;
-    d.X.vals = calloc(d.X.rows, sizeof(float*));
-    d.X.cols = h*w*3;
-
-    d.y = make_matrix(n, (((w/div)*(h/div))+1)*boxes);
-
-    for(i = 0; i < n; ++i){
-        image orig = load_image_color(random_paths[i], 0, 0);
-        augment_args a = random_augment_args(orig, angle, aspect, min, max, w, h);
-        image sized = rotate_crop_image(orig, a.rad, a.scale, a.w, a.h, a.dx, a.dy, a.aspect);
-
-        int flip = rand()%2;
-        if(flip) flip_image(sized);
-        random_distort_image(sized, hue, saturation, exposure);
-        d.X.vals[i] = sized.data;
-        //show_image(sized, "image");
-
-        fill_truth_iseg(random_paths[i], boxes, d.y.vals[i], classes, orig.w, orig.h, a, flip, w/div, h/div);
-
-        free_image(orig);
-
-        /*
-           image rgb = mask_to_rgb(sized_m, classes);
-           show_image(rgb, "part");
-           show_image(sized, "orig");
-           cvWaitKey(0);
-           free_image(rgb);
-         */
-    }
-    free(random_paths);
-    return d;
-}
-
-data load_data_mask(int n, char **paths, int m, int w, int h, int classes, int boxes, int coords, int min, int max, float angle, float aspect, float hue, float saturation, float exposure)
-{
-    char **random_paths = get_random_paths(paths, n, m);
-    int i;
-    data d = {0};
-    d.shallow = 0;
-
-    d.X.rows = n;
-    d.X.vals = calloc(d.X.rows, sizeof(float*));
-    d.X.cols = h*w*3;
-
-    d.y = make_matrix(n, (coords+1)*boxes);
-
-    for(i = 0; i < n; ++i){
-        image orig = load_image_color(random_paths[i], 0, 0);
-        augment_args a = random_augment_args(orig, angle, aspect, min, max, w, h);
-        image sized = rotate_crop_image(orig, a.rad, a.scale, a.w, a.h, a.dx, a.dy, a.aspect);
-
-        int flip = rand()%2;
-        if(flip) flip_image(sized);
-        random_distort_image(sized, hue, saturation, exposure);
-        d.X.vals[i] = sized.data;
-        //show_image(sized, "image");
-
-        fill_truth_mask(random_paths[i], boxes, d.y.vals[i], classes, orig.w, orig.h, a, flip, 14, 14);
-
-        free_image(orig);
-
-        /*
-           image rgb = mask_to_rgb(sized_m, classes);
-           show_image(rgb, "part");
-           show_image(sized, "orig");
-           cvWaitKey(0);
-           free_image(rgb);
-         */
-    }
-    free(random_paths);
-    return d;
 }
 
 data load_data_region(int n, char **paths, int m, int w, int h, int size, int classes, float jitter, float hue, float saturation, float exposure)
@@ -984,7 +651,7 @@ data load_data_region(int n, char **paths, int m, int w, int h, int size, int cl
     d.shallow = 0;
 
     d.X.rows = n;
-    d.X.vals = calloc(d.X.rows, sizeof(float*));
+    d.X.vals = (float**)xcalloc(d.X.rows, sizeof(float*));
     d.X.cols = h*w*3;
 
 
@@ -1010,7 +677,7 @@ data load_data_region(int n, char **paths, int m, int w, int h, int size, int cl
         float sx = (float)swidth  / ow;
         float sy = (float)sheight / oh;
 
-        int flip = rand()%2;
+        int flip = random_gen()%2;
         image cropped = crop_image(orig, pleft, ptop, swidth, sheight);
 
         float dx = ((float)pleft/ow)/sx;
@@ -1038,7 +705,7 @@ data load_data_compare(int n, char **paths, int m, int classes, int w, int h)
     d.shallow = 0;
 
     d.X.rows = n;
-    d.X.vals = calloc(d.X.rows, sizeof(float*));
+    d.X.vals = (float**)xcalloc(d.X.rows, sizeof(float*));
     d.X.cols = h*w*6;
 
     int k = 2*(classes);
@@ -1047,7 +714,7 @@ data load_data_compare(int n, char **paths, int m, int classes, int w, int h)
         image im1 = load_image_color(paths[i*2],   w, h);
         image im2 = load_image_color(paths[i*2+1], w, h);
 
-        d.X.vals[i] = calloc(d.X.cols, sizeof(float));
+        d.X.vals[i] = (float*)xcalloc(d.X.cols, sizeof(float));
         memcpy(d.X.vals[i],         im1.data, h*w*3*sizeof(float));
         memcpy(d.X.vals[i] + h*w*3, im2.data, h*w*3*sizeof(float));
 
@@ -1096,7 +763,7 @@ data load_data_compare(int n, char **paths, int m, int classes, int w, int h)
 
 data load_data_swag(char **paths, int n, int classes, float jitter)
 {
-    int index = rand()%n;
+    int index = random_gen()%n;
     char *random_path = paths[index];
 
     image orig = load_image_color(random_path, 0, 0);
@@ -1109,10 +776,10 @@ data load_data_swag(char **paths, int n, int classes, float jitter)
     d.h = h;
 
     d.X.rows = 1;
-    d.X.vals = calloc(d.X.rows, sizeof(float*));
+    d.X.vals = (float**)xcalloc(d.X.rows, sizeof(float*));
     d.X.cols = h*w*3;
 
-    int k = (4+classes)*90;
+    int k = (4+classes)*30;
     d.y = make_matrix(1, k);
 
     int dw = w*jitter;
@@ -1129,7 +796,7 @@ data load_data_swag(char **paths, int n, int classes, float jitter)
     float sx = (float)swidth  / w;
     float sy = (float)sheight / h;
 
-    int flip = rand()%2;
+    int flip = random_gen()%2;
     image cropped = crop_image(orig, pleft, ptop, swidth, sheight);
 
     float dx = ((float)pleft/w)/sx;
@@ -1147,6 +814,133 @@ data load_data_swag(char **paths, int n, int classes, float jitter)
     return d;
 }
 
+void blend_truth(float *new_truth, int boxes, float *old_truth)
+{
+    const int t_size = 4 + 1;
+    int count_new_truth = 0;
+    int t;
+    for (t = 0; t < boxes; ++t) {
+        float x = new_truth[t*(4 + 1)];
+        if (!x) break;
+        count_new_truth++;
+
+    }
+    for (t = count_new_truth; t < boxes; ++t) {
+        float *new_truth_ptr = new_truth + t*t_size;
+        float *old_truth_ptr = old_truth + (t - count_new_truth)*t_size;
+        float x = old_truth_ptr[0];
+        if (!x) break;
+
+        new_truth_ptr[0] = old_truth_ptr[0];
+        new_truth_ptr[1] = old_truth_ptr[1];
+        new_truth_ptr[2] = old_truth_ptr[2];
+        new_truth_ptr[3] = old_truth_ptr[3];
+        new_truth_ptr[4] = old_truth_ptr[4];
+    }
+    //printf("\n was %d bboxes, now %d bboxes \n", count_new_truth, t);
+}
+
+
+void blend_truth_mosaic(float *new_truth, int boxes, float *old_truth, int w, int h, float cut_x, float cut_y, int i_mixup,
+    int left_shift, int right_shift, int top_shift, int bot_shift)
+{
+    const int t_size = 4 + 1;
+    int count_new_truth = 0;
+    int t;
+    for (t = 0; t < boxes; ++t) {
+        float x = new_truth[t*(4 + 1)];
+        if (!x) break;
+        count_new_truth++;
+
+    }
+    int new_t = count_new_truth;
+    for (t = count_new_truth; t < boxes; ++t) {
+        float *new_truth_ptr = new_truth + new_t*t_size;
+        new_truth_ptr[0] = 0;
+        float *old_truth_ptr = old_truth + (t - count_new_truth)*t_size;
+        float x = old_truth_ptr[0];
+        if (!x) break;
+
+        float xb = old_truth_ptr[0];
+        float yb = old_truth_ptr[1];
+        float wb = old_truth_ptr[2];
+        float hb = old_truth_ptr[3];
+
+
+
+        // shift 4 images
+        if (i_mixup == 0) {
+            xb = xb - (float)(w - cut_x - right_shift) / w;
+            yb = yb - (float)(h - cut_y - bot_shift) / h;
+        }
+        if (i_mixup == 1) {
+            xb = xb + (float)(cut_x - left_shift) / w;
+            yb = yb - (float)(h - cut_y - bot_shift) / h;
+        }
+        if (i_mixup == 2) {
+            xb = xb - (float)(w - cut_x - right_shift) / w;
+            yb = yb + (float)(cut_y - top_shift) / h;
+        }
+        if (i_mixup == 3) {
+            xb = xb + (float)(cut_x - left_shift) / w;
+            yb = yb + (float)(cut_y - top_shift) / h;
+        }
+
+        int left = (xb - wb / 2)*w;
+        int right = (xb + wb / 2)*w;
+        int top = (yb - hb / 2)*h;
+        int bot = (yb + hb / 2)*h;
+
+        // fix out of bound
+        if (left < 0) {
+            float diff = (float)left / w;
+            xb = xb - diff / 2;
+            wb = wb + diff;
+        }
+
+        if (right > w) {
+            float diff = (float)(right - w) / w;
+            xb = xb - diff / 2;
+            wb = wb - diff;
+        }
+
+        if (top < 0) {
+            float diff = (float)top / h;
+            yb = yb - diff / 2;
+            hb = hb + diff;
+        }
+
+        if (bot > h) {
+            float diff = (float)(bot - h) / h;
+            yb = yb - diff / 2;
+            hb = hb - diff;
+        }
+
+        left = (xb - wb / 2)*w;
+        right = (xb + wb / 2)*w;
+        top = (yb - hb / 2)*h;
+        bot = (yb + hb / 2)*h;
+
+        // leave only within the image
+        if(left >= 0 && right <= w && top >= 0 && bot <= h &&
+            wb > 0 && wb < 1 && hb > 0 && hb < 1 &&
+            xb > 0 && xb < 1 && yb > 0 && yb < 1)
+        {
+            new_truth_ptr[0] = xb;
+            new_truth_ptr[1] = yb;
+            new_truth_ptr[2] = wb;
+            new_truth_ptr[3] = hb;
+            new_truth_ptr[4] = old_truth_ptr[4];
+            new_t++;
+        }
+    }
+    //printf("\n was %d bboxes, now %d bboxes \n", count_new_truth, t);
+}
+
+#ifdef OPENCV
+
+#include "http_stream.h"
+
 /*
 ** 可以参考，看一下对图像进行jitter处理的各种效果:
 ** https://github.com/vxy10/ImageAugmentation
@@ -1158,27 +952,341 @@ data load_data_swag(char **paths, int n, int classes, float jitter)
 **       m         paths的行数，也即训练图片总数
 **       w         网络能够处理的图的宽度（也就是输入图片经过一系列数据增强、变换之后最终输入到网络的图的宽度）
 **       h         网络能够处理的图的高度（也就是输入图片经过一系列数据增强、变换之后最终输入到网络的图的高度）
+**       c         用来指定训练图片的通道数（默认为3，即RGB图）
 **       boxes     每张训练图片最大处理的矩形框数（图片内可能含有更多的物体，即更多的矩形框，那么就在其中随机选择boxes个参与训练，具体执行在fill_truth_detection()函数中）
 **       classes   类别总数，本函数并未用到（fill_truth_detection函数其实并没有用这个参数）
+**       use_flip  是否使用水平翻转
+**       use_mixup 是否使用mixup数据增强 
 **       jitter    这个参数为缩放抖动系数，就是图片缩放抖动的剧烈程度，越大，允许的抖动范围越大（所谓缩放抖动，就是在宽高上插值缩放图片，宽高两方向上缩放的系数不一定相同）
 **       hue       颜色（hsv颜色空间）数据增强参数：色调（取值0度到360度）偏差最大值，实际色调偏差为-hue~hue之间的随机值
 **       saturation 颜色（hsv颜色空间）数据增强参数：色彩饱和度（取值范围0~1）缩放最大值，实际为范围内的随机值
 **       exposure  颜色（hsv颜色空间）数据增强参数：明度（色彩明亮程度，0~1）缩放最大值，实际为范围内的随机值
+**       mini_batch 
+**       track 
+**       augment_speed 
+**       letter_box 是否进行letter_box变换
+**       show_imgs 
 ** 返回： data类型数据，包含一个线程读入的所有图片数据（含有n张图片）
 ** 说明： 最后四个参数用于数据增强，主要对原图进行缩放抖动，位置抖动（平移）以及颜色抖动（颜色值增加一定噪声），抖动一定程度上可以理解成对图像增加噪声。
 **       通过对原始图像进行抖动，实现数据增强。最后三个参数具体用法参考本函数内调用的random_distort_image()函数
 ** 说明2：从此函数可以看出，darknet对训练集中图片的尺寸没有要求，可以是任意尺寸的图片，因为经该函数处理（缩放/裁剪）之后，
 **       不管是什么尺寸的照片，都会统一为网络训练使用的尺寸
 */
-data load_data_detection(int n, char **paths, int m, int w, int h, int boxes, int classes, float jitter, float hue, float saturation, float exposure)
+data load_data_detection(int n, char **paths, int m, int w, int h, int c, int boxes, int classes, int use_flip, int use_blur, int use_mixup,
+    float jitter, float hue, float saturation, float exposure, int mini_batch, int track, int augment_speed, int letter_box, int show_imgs)
 {
-    // paths包含所有训练图片的路径，get_random_paths函数从中随机提出n条，即为此次读入的n张图片的路径
-    char **random_paths = get_random_paths(paths, n, m);
+    const int random_index = random_gen();
+    c = c ? c : 3;
+
+    assert(use_mixup != 2);
+	// mixup 和 letter_box策略不能共存
+    if (use_mixup == 3 && letter_box) {
+        printf("\n Combination: letter_box=1 & mosaic=1 - isn't supported, use only 1 of these parameters \n");
+        exit(0);
+    }
+    if (random_gen() % 2 == 0) use_mixup = 0;
     int i;
-    // 初始化为0,清楚内存中之前的旧值
+
+    int *cut_x = NULL, *cut_y = NULL;
+    if (use_mixup == 3) {
+        cut_x = (int*)calloc(n, sizeof(int));
+        cut_y = (int*)calloc(n, sizeof(int));
+        const float min_offset = 0.2; // 20%
+        for (i = 0; i < n; ++i) {
+            cut_x[i] = rand_int(w*min_offset, w*(1 - min_offset));
+            cut_y[i] = rand_int(h*min_offset, h*(1 - min_offset));
+        }
+    }
+
     data d = {0};
     d.shallow = 0;
-    // 一次读入的图片张数：d.X中每行就是一张图片的数据，因此d.X.cols等于h*w*3
+
+    d.X.rows = n;
+    d.X.vals = (float**)xcalloc(d.X.rows, sizeof(float*));
+    d.X.cols = h*w*c;
+
+    float r1 = 0, r2 = 0, r3 = 0, r4 = 0, r_scale = 0;
+    float dhue = 0, dsat = 0, dexp = 0, flip = 0, blur = 0;
+    int augmentation_calculated = 0;
+
+    d.y = make_matrix(n, 5*boxes);
+    int i_mixup = 0;
+    for (i_mixup = 0; i_mixup <= use_mixup; i_mixup++) {
+        if (i_mixup) augmentation_calculated = 0;   // recalculate augmentation for the 2nd sequence if(track==1)
+
+        char **random_paths;
+        if (track) random_paths = get_sequential_paths(paths, n, m, mini_batch, augment_speed);
+        else random_paths = get_random_paths(paths, n, m);
+
+        for (i = 0; i < n; ++i) {
+            float *truth = (float*)xcalloc(5 * boxes, sizeof(float));
+            const char *filename = random_paths[i];
+
+            int flag = (c >= 3);
+            mat_cv *src;
+            src = load_image_mat_cv(filename, flag);
+            if (src == NULL) {
+                if (check_mistakes) getchar();
+                continue;
+            }
+
+            int oh = get_height_mat(src);
+            int ow = get_width_mat(src);
+
+            int dw = (ow*jitter);
+            int dh = (oh*jitter);
+
+            if (!augmentation_calculated || !track)
+            {
+                augmentation_calculated = 1;
+                r1 = random_float();
+                r2 = random_float();
+                r3 = random_float();
+                r4 = random_float();
+
+                r_scale = random_float();
+
+                dhue = rand_uniform_strong(-hue, hue);
+                dsat = rand_scale(saturation);
+                dexp = rand_scale(exposure);
+
+                flip = use_flip ? random_gen() % 2 : 0;
+
+                if (use_blur) {
+                    int tmp_blur = rand_int(0, 2);  // 0 - disable, 1 - blur background, 2 - blur the whole image
+                    if (tmp_blur == 0) blur = 0;
+                    else if (tmp_blur == 1) blur = 1;
+                    else blur = use_blur;
+                }
+            }
+
+            int pleft = rand_precalc_random(-dw, dw, r1);
+            int pright = rand_precalc_random(-dw, dw, r2);
+            int ptop = rand_precalc_random(-dh, dh, r3);
+            int pbot = rand_precalc_random(-dh, dh, r4);
+            //printf("\n pleft = %d, pright = %d, ptop = %d, pbot = %d, ow = %d, oh = %d \n", pleft, pright, ptop, pbot, ow, oh);
+
+            //float scale = rand_precalc_random(.25, 2, r_scale); // unused currently
+
+            if (letter_box)
+            {
+                float img_ar = (float)ow / (float)oh;
+                float net_ar = (float)w / (float)h;
+                float result_ar = img_ar / net_ar;
+                //printf(" ow = %d, oh = %d, w = %d, h = %d, img_ar = %f, net_ar = %f, result_ar = %f \n", ow, oh, w, h, img_ar, net_ar, result_ar);
+                if (result_ar > 1)  // sheight - should be increased
+                {
+                    float oh_tmp = ow / net_ar;
+                    float delta_h = (oh_tmp - oh)/2;
+                    ptop = ptop - delta_h;
+                    pbot = pbot - delta_h;
+                    //printf(" result_ar = %f, oh_tmp = %f, delta_h = %d, ptop = %f, pbot = %f \n", result_ar, oh_tmp, delta_h, ptop, pbot);
+                }
+                else  // swidth - should be increased
+                {
+                    float ow_tmp = oh * net_ar;
+                    float delta_w = (ow_tmp - ow)/2;
+                    pleft = pleft - delta_w;
+                    pright = pright - delta_w;
+                    //printf(" result_ar = %f, ow_tmp = %f, delta_w = %d, pleft = %f, pright = %f \n", result_ar, ow_tmp, delta_w, pleft, pright);
+                }
+            }
+
+            int swidth = ow - pleft - pright;
+            int sheight = oh - ptop - pbot;
+
+            float sx = (float)swidth / ow;
+            float sy = (float)sheight / oh;
+
+            float dx = ((float)pleft / ow) / sx;
+            float dy = ((float)ptop / oh) / sy;
+
+			// truth包含所有图像的标签信息（包括真实类别与位置
+            // 因为对原始图片进行了数据增强，其中的平移抖动势必会改动每个物体的矩形框标签信息（主要是矩形框的像素坐标信息），需要根据具体的数据增强方式进行相应矫正
+            // 后面4个参数就是用于数据增强后的矩形框信息矫正（nw,nh是中间图宽高，w,h是最终图宽高）
+            int min_w_h = fill_truth_detection(filename, boxes, truth, classes, flip, dx, dy, 1. / sx, 1. / sy, w, h);
+			
+			// 如果
+            if ((min_w_h / 8) < blur && blur > 1) blur = min_w_h / 8;   // disable blur if one of the objects is too small
+
+            image ai = image_data_augmentation(src, w, h, pleft, ptop, swidth, sheight, flip, dhue, dsat, dexp,
+                blur, boxes, truth);
+
+            if (use_mixup == 0) {
+                d.X.vals[i] = ai.data;
+                memcpy(d.y.vals[i], truth, 5 * boxes * sizeof(float));
+            }
+            else if (use_mixup == 1) {
+                if (i_mixup == 0) {
+                    d.X.vals[i] = ai.data;
+                    memcpy(d.y.vals[i], truth, 5 * boxes * sizeof(float));
+                }
+                else if (i_mixup == 1) {
+                    image old_img = make_empty_image(w, h, c);
+                    old_img.data = d.X.vals[i];
+                    //show_image(ai, "new");
+                    //show_image(old_img, "old");
+                    //wait_until_press_key_cv();
+                    blend_images_cv(ai, 0.5, old_img, 0.5);
+                    blend_truth(d.y.vals[i], boxes, truth);
+                    free_image(old_img);
+                    d.X.vals[i] = ai.data;
+                }
+            }
+            else if (use_mixup == 3) {
+                if (i_mixup == 0) {
+                    image tmp_img = make_image(w, h, c);
+                    d.X.vals[i] = tmp_img.data;
+                }
+
+                if (flip) {
+                    int tmp = pleft;
+                    pleft = pright;
+                    pright = tmp;
+                }
+
+                const int left_shift = min_val_cmp(cut_x[i], max_val_cmp(0, (-pleft*w / ow)));
+                const int top_shift = min_val_cmp(cut_y[i], max_val_cmp(0, (-ptop*h / oh)));
+
+                const int right_shift = min_val_cmp((w - cut_x[i]), max_val_cmp(0, (-pright*w / ow)));
+                const int bot_shift = min_val_cmp(h - cut_y[i], max_val_cmp(0, (-pbot*h / oh)));
+
+
+                int k, x, y;
+                for (k = 0; k < c; ++k) {
+                    for (y = 0; y < h; ++y) {
+                        int j = y*w + k*w*h;
+                        if (i_mixup == 0 && y < cut_y[i]) {
+                            int j_src = (w - cut_x[i] - right_shift) + (y + h - cut_y[i] - bot_shift)*w + k*w*h;
+                            memcpy(&d.X.vals[i][j + 0], &ai.data[j_src], cut_x[i] * sizeof(float));
+                        }
+                        if (i_mixup == 1 && y < cut_y[i]) {
+                            int j_src = left_shift + (y + h - cut_y[i] - bot_shift)*w + k*w*h;
+                            memcpy(&d.X.vals[i][j + cut_x[i]], &ai.data[j_src], (w-cut_x[i]) * sizeof(float));
+                        }
+                        if (i_mixup == 2 && y >= cut_y[i]) {
+                            int j_src = (w - cut_x[i] - right_shift) + (top_shift + y - cut_y[i])*w + k*w*h;
+                            memcpy(&d.X.vals[i][j + 0], &ai.data[j_src], cut_x[i] * sizeof(float));
+                        }
+                        if (i_mixup == 3 && y >= cut_y[i]) {
+                            int j_src = left_shift + (top_shift + y - cut_y[i])*w + k*w*h;
+                            memcpy(&d.X.vals[i][j + cut_x[i]], &ai.data[j_src], (w - cut_x[i]) * sizeof(float));
+                        }
+                    }
+                }
+
+                blend_truth_mosaic(d.y.vals[i], boxes, truth, w, h, cut_x[i], cut_y[i], i_mixup, left_shift, right_shift, top_shift, bot_shift);
+
+                free_image(ai);
+                ai.data = d.X.vals[i];
+            }
+
+
+            if (show_imgs && i_mixup == use_mixup)   // delete i_mixup
+            {
+                image tmp_ai = copy_image(ai);
+                char buff[1000];
+                //sprintf(buff, "aug_%d_%d_%s_%d", random_index, i, basecfg((char*)filename), random_gen());
+                sprintf(buff, "aug_%d_%d_%d", random_index, i, random_gen());
+                int t;
+                for (t = 0; t < boxes; ++t) {
+                    box b = float_to_box_stride(d.y.vals[i] + t*(4 + 1), 1);
+                    if (!b.x) break;
+                    int left = (b.x - b.w / 2.)*ai.w;
+                    int right = (b.x + b.w / 2.)*ai.w;
+                    int top = (b.y - b.h / 2.)*ai.h;
+                    int bot = (b.y + b.h / 2.)*ai.h;
+                    draw_box_width(tmp_ai, left, top, right, bot, 1, 150, 100, 50); // 3 channels RGB
+                }
+
+                save_image(tmp_ai, buff);
+                if (show_imgs == 1) {
+                    //char buff_src[1000];
+                    //sprintf(buff_src, "src_%d_%d_%s_%d", random_index, i, basecfg((char*)filename), random_gen());
+                    //show_image_mat(src, buff_src);
+                    show_image(tmp_ai, buff);
+                    wait_until_press_key_cv();
+                }
+                printf("\nYou use flag -show_imgs, so will be saved aug_...jpg images. Click on window and press ESC button \n");
+                free_image(tmp_ai);
+            }
+
+            release_mat(&src);
+            free(truth);
+        }
+        if (random_paths) free(random_paths);
+    }
+
+
+    return d;
+}
+#else    // OPENCV
+void blend_images(image new_img, float alpha, image old_img, float beta)
+{
+    int data_size = new_img.w * new_img.h * new_img.c;
+    int i;
+    #pragma omp parallel for
+    for (i = 0; i < data_size; ++i)
+        new_img.data[i] = new_img.data[i] * alpha + old_img.data[i] * beta;
+}
+
+/*
+** 可以参考，看一下对图像进行jitter处理的各种效果:
+** https://github.com/vxy10/ImageAugmentation
+** 从所有训练图片中，随机读取n张，并对这n张图片进行数据增强，同时矫正增强后的数据标签信息。最终得到的图片的宽高为w,h（原始训练集中的图片尺寸不定），也就是网络能够处理的图片尺寸，
+** 数据增强包括：对原始图片进行宽高方向上的插值缩放（两方向上缩放系数不一定相同），下面称之为缩放抖动；随机抠取或者平移图片（位置抖动）；
+** 在hsv颜色空间增加噪声（颜色抖动）；左右水平翻转，不含旋转抖动。
+** 输入： n         一个线程读入的图片张数（详见函数内部注释）
+**       paths     所有训练图片所在路径集合，是一个二维数组，每一行对应一张图片的路径（将在其中随机取n个）
+**       m         paths的行数，也即训练图片总数
+**       w         网络能够处理的图的宽度（也就是输入图片经过一系列数据增强、变换之后最终输入到网络的图的宽度）
+**       h         网络能够处理的图的高度（也就是输入图片经过一系列数据增强、变换之后最终输入到网络的图的高度）
+**       c         用来指定训练图片的通道数（默认为3，即RGB图）
+**       boxes     每张训练图片最大处理的矩形框数（图片内可能含有更多的物体，即更多的矩形框，那么就在其中随机选择boxes个参与训练，具体执行在fill_truth_detection()函数中）
+**       classes   类别总数，本函数并未用到（fill_truth_detection函数其实并没有用这个参数）
+**       use_flip  是否使用水平翻转
+**       use_mixup 是否使用mixup数据增强 
+**       jitter    这个参数为缩放抖动系数，就是图片缩放抖动的剧烈程度，越大，允许的抖动范围越大（所谓缩放抖动，就是在宽高上插值缩放图片，宽高两方向上缩放的系数不一定相同）
+**       hue       颜色（hsv颜色空间）数据增强参数：色调（取值0度到360度）偏差最大值，实际色调偏差为-hue~hue之间的随机值
+**       saturation 颜色（hsv颜色空间）数据增强参数：色彩饱和度（取值范围0~1）缩放最大值，实际为范围内的随机值
+**       exposure  颜色（hsv颜色空间）数据增强参数：明度（色彩明亮程度，0~1）缩放最大值，实际为范围内的随机值
+**       mini_batch      和目标跟踪有关，这里不关注
+**       track           和目标跟踪有关，这里不关注
+**       augment_speed   和目标跟踪有关，这里不关注
+**       letter_box 是否进行letter_box变换
+**       show_imgs 
+** 返回： data类型数据，包含一个线程读入的所有图片数据（含有n张图片）
+** 说明： 最后四个参数用于数据增强，主要对原图进行缩放抖动，位置抖动（平移）以及颜色抖动（颜色值增加一定噪声），抖动一定程度上可以理解成对图像增加噪声。
+**       通过对原始图像进行抖动，实现数据增强。最后三个参数具体用法参考本函数内调用的random_distort_image()函数
+** 说明2：从此函数可以看出，darknet对训练集中图片的尺寸没有要求，可以是任意尺寸的图片，因为经该函数处理（缩放/裁剪）之后，
+**       不管是什么尺寸的照片，都会统一为网络训练使用的尺寸
+*/
+
+data load_data_detection(int n, char **paths, int m, int w, int h, int c, int boxes, int classes, int use_flip, int use_blur, int use_mixup, float jitter,
+    float hue, float saturation, float exposure, int mini_batch, int track, int augment_speed, int letter_box, int show_imgs)
+{
+    const int random_index = random_gen();
+    c = c ? c : 3;
+    char **random_paths;
+    char **mixup_random_paths = NULL;
+	// paths包含所有训练图片的路径，get_random_paths函数从中随机提出n条，即为此次读入的n张图片的路径
+    if(track) random_paths = get_sequential_paths(paths, n, m, mini_batch, augment_speed);
+    else random_paths = get_random_paths(paths, n, m);
+
+    assert(use_mixup < 2);
+    int mixup = use_mixup ? random_gen() % 2 : 0;
+    //printf("\n mixup = %d \n", mixup);
+	// 如果使用mixup策略，需要再随机取出n条数据，即n张图片
+    if (mixup) {
+        if (track) mixup_random_paths = get_sequential_paths(paths, n, m, mini_batch, augment_speed);
+        else mixup_random_paths = get_random_paths(paths, n, m);
+    }
+
+    int i;
+	// 初始化为0,清空内存中之前的旧值
+    data d = { 0 };
+    d.shallow = 0;
+	// 一次读入的图片张数：d.X中每行就是一张图片的数据，因此d.X.cols等于h*w*3
     // n = net.batch * net.subdivisions * ngpus，net中的subdivisions这个参数暂时还没搞懂有什么用，
     // 从parse_net_option()函数可知，net.batch = net.batch / net.subdivision，等号右边的那个batch就是
     // 网络配置文件.cfg中设置的每个batch的图片数量，但是不知道为什么多了subdivision这个参数？总之，
@@ -1187,75 +1295,159 @@ data load_data_detection(int n, char **paths, int m, int w, int h, int boxes, in
     // 也就是总的读入图片张数为n = net.batch * net.subdivisions * ngpus，但这些图片不是一个线程读完的，而是分配到多个线程并行读入，
     // 因此本函数中的n实际不是总的n，而是分配到该线程上的n，比如总共要读入128张图片，共开启8个线程读数据，那么本函数中的n为16,而不是总数128
     d.X.rows = n;
-    //d.X为一个matrix类型数据，其中d.X.vals是其具体数据，是指针的指针（即为二维数组），此处先为第一维动态分配内存
-    d.X.vals = calloc(d.X.rows, sizeof(float*));
-    d.X.cols = h*w*3;
-    // d.y存储了所有读入照片的标签信息，每条标签包含5条信息：类别，以及矩形框的x,y,w,h
+	//d.X为一个matrix类型数据，其中d.X.vals是其具体数据，是指针的指针（即为二维数组），此处先为第一维动态分配内存
+    d.X.vals = (float**)xcalloc(d.X.rows, sizeof(float*));
+    d.X.cols = h*w*c;
+
+    float r1 = 0, r2 = 0, r3 = 0, r4 = 0, r_scale;
+    float dhue = 0, dsat = 0, dexp = 0, flip = 0;
+    int augmentation_calculated = 0;
+	// d.y存储了所有读入照片的标签信息，每条标签包含5条信息：类别，以及矩形框的x,y,w,h
     // boxes为一张图片最多能够处理（参与训练）的矩形框的数（如果图片中的矩形框数多于这个数，那么随机挑选boxes个，这个参数仅在parse_region以及parse_detection中出现，好奇怪？    
     // 在其他网络解析函数中并没有出现）。同样，d.y是一个matrix，make_matrix会指定y的行数和列数，同时会为其第一维动态分配内存
-    d.y = make_matrix(n, 5*boxes);
-    // 依次读入每一张图片到d.X.vals的适当位置，同时读入对应的标签信息到d.y.vals的适当位置
-    for(i = 0; i < n; ++i){
-        //读入原始的图片
-        image orig = load_image_color(random_paths[i], 0, 0);
-        // 原始图片经过一系列处理（重排及变换）之后的最终得到的图片，并初始化像素值全为0.5（下面会称之为输出图或者最终图之类的）
-        image sized = make_image(w, h, orig.c);
-        fill_image(sized, .5);
-        // 缩放抖动大小：缩放抖动系数乘以原始图宽高即得像素单位意义上的缩放抖动
-        float dw = jitter * orig.w;
-        float dh = jitter * orig.h;
-        // 缩放抖动大小：缩放抖动系数乘以原始图宽高即得像素单位意义上的缩放抖动
-        float new_ar = (orig.w + rand_uniform(-dw, dw)) / (orig.h + rand_uniform(-dh, dh));
-        //float scale = rand_uniform(.25, 2);
-        
-        // 为了方便，引入了一个虚拟的中间图（之所以称为虚拟，是因为这个中间图并不是一个真实存在的变量），
-        // 下面两个变量nh,nw其实是中间图的高宽，而scale就是中间图相对于输出图sized的缩放尺寸（比sized大或者小）
-        // 中间图与sized 并不是保持长宽比等比例缩放，中间图的长宽比为new_ar，而sized的长宽比为w/h，
-        // 二者之间的唯一的关系就是有一条边（宽或高）的长度比例为scale
-        float scale = 1;
-        //nw, nh为中间图的宽高，new_ar为中间图的宽高比
-        float nw, nh;
+    d.y = make_matrix(n, 5 * boxes);
+    int i_mixup = 0;
+    for (i_mixup = 0; i_mixup <= mixup; i_mixup++) {
+        if (i_mixup) augmentation_calculated = 0;
+        for (i = 0; i < n; ++i) {
+			
+            float *truth = (float*)xcalloc(5 * boxes, sizeof(float));
+            char *filename = (i_mixup) ? mixup_random_paths[i] : random_paths[i];
+			//读入原始的图片
+            image orig = load_image(filename, 0, 0, c);
+			// 原始图像长宽
+            int oh = orig.h;
+            int ow = orig.w;
+			// 缩放抖动大小：缩放抖动系数乘以原始图宽高即得像素单位意义上的缩放抖动
+            int dw = (ow*jitter);
+            int dh = (oh*jitter);
 
-        if(new_ar < 1){
-            // new_ar<1，说明宽度小于高度，则以高度为主，宽度按高度的比例计算
-            nh = scale * h;
-            nw = nh * new_ar;
-        } else {
-            // 否则说明高度小于等于宽度，则以宽度为主，高度按宽度比例计算 
-            nw = scale * w;
-            nh = nw / new_ar;
+            if (!augmentation_calculated || !track)
+            {
+                augmentation_calculated = 1;
+                r1 = random_float();
+                r2 = random_float();
+                r3 = random_float();
+                r4 = random_float();
+
+                r_scale = random_float();
+
+                dhue = rand_uniform_strong(-hue, hue);
+                dsat = rand_scale(saturation);
+                dexp = rand_scale(exposure);
+
+                flip = use_flip ? random_gen() % 2 : 0;
+            }
+
+            int pleft = rand_precalc_random(-dw, dw, r1);
+            int pright = rand_precalc_random(-dw, dw, r2);
+            int ptop = rand_precalc_random(-dh, dh, r3);
+            int pbot = rand_precalc_random(-dh, dh, r4);
+			// 这个系数没用到
+            float scale = rand_precalc_random(.25, 2, r_scale); // unused currently
+
+            if (letter_box)
+            {
+                float img_ar = (float)ow / (float)oh; //原始图像宽高比
+                float net_ar = (float)w / (float)h; //输入到网络要求的图像宽高比
+                float result_ar = img_ar / net_ar; //两者求比值来判断如何进行letter_box缩放
+                //printf(" ow = %d, oh = %d, w = %d, h = %d, img_ar = %f, net_ar = %f, result_ar = %f \n", ow, oh, w, h, img_ar, net_ar, result_ar);
+                if (result_ar > 1)  // sheight - should be increased
+                {
+                    float oh_tmp = ow / net_ar;
+                    float delta_h = (oh_tmp - oh) / 2;
+                    ptop = ptop - delta_h;
+                    pbot = pbot - delta_h;
+                    //printf(" result_ar = %f, oh_tmp = %f, delta_h = %d, ptop = %f, pbot = %f \n", result_ar, oh_tmp, delta_h, ptop, pbot);
+                }
+                else  // swidth - should be increased
+                {
+                    float ow_tmp = oh * net_ar;
+                    float delta_w = (ow_tmp - ow) / 2;
+                    pleft = pleft - delta_w;
+                    pright = pright - delta_w;
+                    //printf(" result_ar = %f, ow_tmp = %f, delta_w = %d, pleft = %f, pright = %f \n", result_ar, ow_tmp, delta_w, pleft, pright);
+                }
+            }
+			// 以下步骤就是执行了letter_box变换
+            int swidth = ow - pleft - pright;
+            int sheight = oh - ptop - pbot;
+
+            float sx = (float)swidth / ow;
+            float sy = (float)sheight / oh;
+
+            image cropped = crop_image(orig, pleft, ptop, swidth, sheight);
+
+            float dx = ((float)pleft / ow) / sx;
+            float dy = ((float)ptop / oh) / sy;
+			// resize到指定大小
+            image sized = resize_image(cropped, w, h);
+            // 翻转
+			if (flip) flip_image(sized);
+			//随机对图像jitter（在hsv三个通道上添加扰动），实现数据增强
+            distort_image(sized, dhue, dsat, dexp);
+            //random_distort_image(sized, hue, saturation, exposure);
+			// truth包含所有图像的标签信息（包括真实类别与位置
+            // 因为对原始图片进行了数据增强，其中的平移抖动势必会改动每个物体的矩形框标签信息（主要是矩形框的像素坐标信息），需要根据具体的数据增强方式进行相应矫正
+            // 后面的参数就是用于数据增强后的矩形框信息矫正
+            fill_truth_detection(filename, boxes, truth, classes, flip, dx, dy, 1. / sx, 1. / sy, w, h);
+
+            if (i_mixup) {
+                image old_img = sized;
+                old_img.data = d.X.vals[i];
+                //show_image(sized, "new");
+                //show_image(old_img, "old");
+                //wait_until_press_key_cv();
+				// 做mixup，混合系数为0.5
+                blend_images(sized, 0.5, old_img, 0.5);
+				// 标签也要对应改变
+                blend_truth(truth, boxes, d.y.vals[i]);
+                free_image(old_img);
+            }
+
+            d.X.vals[i] = sized.data;
+            memcpy(d.y.vals[i], truth, 5 * boxes * sizeof(float));
+
+            if (show_imgs)// && i_mixup)
+            {
+                char buff[1000];
+                sprintf(buff, "aug_%d_%d_%s_%d", random_index, i, basecfg(filename), random_gen());
+
+                int t;
+                for (t = 0; t < boxes; ++t) {
+                    box b = float_to_box_stride(d.y.vals[i] + t*(4 + 1), 1);
+                    if (!b.x) break;
+                    int left = (b.x - b.w / 2.)*sized.w;
+                    int right = (b.x + b.w / 2.)*sized.w;
+                    int top = (b.y - b.h / 2.)*sized.h;
+                    int bot = (b.y + b.h / 2.)*sized.h;
+                    draw_box_width(sized, left, top, right, bot, 1, 150, 100, 50); // 3 channels RGB
+                }
+
+                save_image(sized, buff);
+                if (show_imgs == 1) {
+                    show_image(sized, buff);
+                    wait_until_press_key_cv();
+                }
+                printf("\nYou use flag -show_imgs, so will be saved aug_...jpg images. Press Enter: \n");
+                //getchar();
+            }
+
+            free_image(orig);
+            free_image(cropped);
+            free(truth);
         }
-        // 得到0~w-nw之间的均匀随机数（w-nw可能大于0,可能小于0，因为scale可能大于1,也可能小于1）
-        float dx = rand_uniform(0, w - nw);
-        // 得到0~h-nh之间的均匀随机数（h-nh可能大于0,可能小于0）
-        float dy = rand_uniform(0, h - nh);
-        // place_image先将orig根据中间图的尺寸nw,nh进行重排（双线性插值，不是等比例缩放，长宽比可能会变），而后，将中间图放入到sized，
-        // dx,dy是将中间图放入到sized的起始坐标位置（dx,dy若大于0,说明sized的尺寸大于中间图的尺寸，这时
-        // 可以说是将中间图随机嵌入到sized中的某个位置；dx,dy若小于0,说明sized的尺寸小于中间图的尺寸，这时
-        // sized相当于是中间图的一个mask，在中间图上随机抠图）
-        place_image(orig, nw, nh, dx, dy, sized);
-        // 随机对图像jitter（在hsv三个通道上添加扰动），实现数据增强
-        random_distort_image(sized, hue, saturation, exposure);
-        // 随机的决定是否进行左右翻转操作来实现数据增强（注意是直接对sized，不是对原始图，也不是中间图）
-        int flip = rand()%2;
-        if(flip) flip_image(sized);
-        // d.X为图像数据，是一个矩阵（二维数组），每一行为一张图片的数据
-        d.X.vals[i] = sized.data;
-
-        // d.y包含所有图像的标签信息（包括真实类别与位置），d.y.vals是一个矩阵（二维数组），每一行含一张图片的标签信息
-        // 因为对原始图片进行了数据增强，其中的平移抖动势必会改动每个物体的矩形框标签信息（主要是矩形框的像素坐标信息），需要根据具体的数据增强方式进行相应矫正
-        // 后面4个参数就是用于数据增强后的矩形框信息矫正（nw,nh是中间图宽高，w,h是最终图宽高）
-        fill_truth_detection(random_paths[i], boxes, d.y.vals[i], classes, flip, -dx/w, -dy/h, nw/w, nh/h);
-
-        free_image(orig);
     }
     free(random_paths);
+    if (mixup_random_paths) free(mixup_random_paths);
     return d;
 }
+#endif    // OPENCV
 
 void *load_thread(void *ptr)
 {
-    //printf("Loading data: %d\n", rand());
+    //srand(time(0));
+    //printf("Loading data: %d\n", random_gen());
     load_args a = *(struct load_args*)ptr;
     if(a.exposure == 0) a.exposure = 1;
     if(a.saturation == 0) a.saturation = 1;
@@ -1263,36 +1455,29 @@ void *load_thread(void *ptr)
 
     if (a.type == OLD_CLASSIFICATION_DATA){
         *a.d = load_data_old(a.paths, a.n, a.m, a.labels, a.classes, a.w, a.h);
-    } else if (a.type == REGRESSION_DATA){
-        *a.d = load_data_regression(a.paths, a.n, a.m, a.classes, a.min, a.max, a.size, a.angle, a.aspect, a.hue, a.saturation, a.exposure);
     } else if (a.type == CLASSIFICATION_DATA){
-        *a.d = load_data_augment(a.paths, a.n, a.m, a.labels, a.classes, a.hierarchy, a.min, a.max, a.size, a.angle, a.aspect, a.hue, a.saturation, a.exposure, a.center);
+        *a.d = load_data_augment(a.paths, a.n, a.m, a.labels, a.classes, a.hierarchy, a.flip, a.min, a.max, a.w, a.h, a.angle, a.aspect, a.hue, a.saturation, a.exposure, a.mixup, a.blur, a.show_imgs, a.label_smooth_eps, a.dontuse_opencv);
     } else if (a.type == SUPER_DATA){
         *a.d = load_data_super(a.paths, a.n, a.m, a.w, a.h, a.scale);
     } else if (a.type == WRITING_DATA){
         *a.d = load_data_writing(a.paths, a.n, a.m, a.w, a.h, a.out_w, a.out_h);
-    } else if (a.type == ISEG_DATA){
-        *a.d = load_data_iseg(a.n, a.paths, a.m, a.w, a.h, a.classes, a.num_boxes, a.scale, a.min, a.max, a.angle, a.aspect, a.hue, a.saturation, a.exposure);
-    } else if (a.type == INSTANCE_DATA){
-        *a.d = load_data_mask(a.n, a.paths, a.m, a.w, a.h, a.classes, a.num_boxes, a.coords, a.min, a.max, a.angle, a.aspect, a.hue, a.saturation, a.exposure);
-    } else if (a.type == SEGMENTATION_DATA){
-        *a.d = load_data_seg(a.n, a.paths, a.m, a.w, a.h, a.classes, a.min, a.max, a.angle, a.aspect, a.hue, a.saturation, a.exposure, a.scale);
     } else if (a.type == REGION_DATA){
         *a.d = load_data_region(a.n, a.paths, a.m, a.w, a.h, a.num_boxes, a.classes, a.jitter, a.hue, a.saturation, a.exposure);
     } else if (a.type == DETECTION_DATA){
-        *a.d = load_data_detection(a.n, a.paths, a.m, a.w, a.h, a.num_boxes, a.classes, a.jitter, a.hue, a.saturation, a.exposure);
+        *a.d = load_data_detection(a.n, a.paths, a.m, a.w, a.h, a.c, a.num_boxes, a.classes, a.flip, a.blur, a.mixup, a.jitter,
+            a.hue, a.saturation, a.exposure, a.mini_batch, a.track, a.augment_speed, a.letter_box, a.show_imgs);
     } else if (a.type == SWAG_DATA){
         *a.d = load_data_swag(a.paths, a.n, a.classes, a.jitter);
     } else if (a.type == COMPARE_DATA){
         *a.d = load_data_compare(a.n, a.paths, a.m, a.classes, a.w, a.h);
     } else if (a.type == IMAGE_DATA){
-        *(a.im) = load_image_color(a.path, 0, 0);
+        *(a.im) = load_image(a.path, 0, 0, a.c);
         *(a.resized) = resize_image(*(a.im), a.w, a.h);
-    } else if (a.type == LETTERBOX_DATA){
-        *(a.im) = load_image_color(a.path, 0, 0);
+    }else if (a.type == LETTERBOX_DATA) {
+        *(a.im) = load_image(a.path, 0, 0, a.c);
         *(a.resized) = letterbox_image(*(a.im), a.w, a.h);
     } else if (a.type == TAG_DATA){
-        *a.d = load_data_tag(a.paths, a.n, a.m, a.classes, a.min, a.max, a.size, a.angle, a.aspect, a.hue, a.saturation, a.exposure);
+        *a.d = load_data_tag(a.paths, a.n, a.m, a.classes, a.flip, a.min, a.max, a.w, a.h, a.angle, a.aspect, a.hue, a.saturation, a.exposure);
     }
     free(ptr);
     return 0;
@@ -1300,17 +1485,17 @@ void *load_thread(void *ptr)
 
 /*
 ** 创建一个线程，读入相应图片数据（此时args.n不再是一次迭代读入的所有图片的张数，而是经过load_threads()均匀分配给每个线程的图片张数）
-** 输入： ptr    包含该线程要读入图片数据的信息（读入多少张，读入图片最终的宽高，图片路径等等）
+** 输入： args    包含该线程要读入图片数据的信息（读入多少张，读入图片最终的宽高，图片路径等等）
 ** 返回： phtread_t   线程id
 ** 说明： 本函数实际没有做什么，就是深拷贝了args给ptr,然后创建了一个调用load_thread()函数的线程并返回线程id
 */
 pthread_t load_data_in_thread(load_args args)
 {
     pthread_t thread;
-    // 同样第一件事深拷贝了args给ptr
-    struct load_args *ptr = calloc(1, sizeof(struct load_args));
+	// 同样第一件事深拷贝了args给ptr（为什么每次都要做这一步呢？求指点啊～）
+    struct load_args* ptr = (load_args*)xcalloc(1, sizeof(struct load_args));
     *ptr = args;
-    // 创建一个线程，读入相应数据，绑定load_thread()函数到该线程上，第四个参数是load_thread()的输入参数，第二个参数表示线程属性，设置为0（即NULL）
+	// 创建一个线程，读入相应数据，绑定load_thread()函数到该线程上，第四个参数是load_thread()的输入参数，第二个参数表示线程属性，设置为0（即NULL）
     if(pthread_create(&thread, 0, load_thread, ptr)) error("Thread creation failed");
     return thread;
 }
@@ -1330,20 +1515,21 @@ pthread_t load_data_in_thread(load_args args)
 */
 void *load_threads(void *ptr)
 {
+    //srand(time(0));
     int i;
-    // 先使用(load_args*)强转void*指针，而后取ptr所指内容赋值给args
+	// 先使用(load_args*)强转void*指针，而后取ptr所指内容赋值给args
     // 虽然args不是指针，args是深拷贝了ptr中的内容，但是要知道ptr（也就是load_args数据类型），有很多的
     // 指针变量，args深拷贝将拷贝这些指针变量到args中（这些指针变量本身对ptr来说就是内容，
     // 而args所指的值是args的内容，不是ptr的，不要混为一谈），因此，args与ptr将会共享所有指针变量所指的内容
     load_args args = *(load_args *)ptr;
     if (args.threads == 0) args.threads = 1;
-    // 另指针变量out=args.d，使得out与args.d指向统一块内存，之后，args.d所指的内存块会变（反正也没什么用了，变就变吧），
+	// 另指针变量out=args.d，使得out与args.d指向统一块内存，之后，args.d所指的内存块会变（反正也没什么用了，变就变吧），
     // 但out不会变，这样可以保证out与最原始的ptr指向同一块存储读入图片数据的内存块，因此最终将图片读到out中，
     // 实际就是读到了最原始的ptr中，比如train_detector()函数中定义的args.d中
     data *out = args.d;
-    // 读入图片的总张数= batch * subdivision * ngpus，可参见train_detector()函数中的赋值
+	// 读入图片的总张数= batch * subdivision * ngpus，可参见train_detector()函数中的赋值
     int total = args.n;
-    // 释放ptr：ptr是传入的指针变量，传入的指针变量本身也是按值传递的，即传入函数之后，指针变量得到复制，函数内的形参ptr
+	// 释放ptr：ptr是传入的指针变量，传入的指针变量本身也是按值传递的，即传入函数之后，指针变量得到复制，函数内的形参ptr
     // 获取外部实参的值之后，二者本身没有关系，但是由于是指针变量，二者之间又存在一丝关系，那就是函数内形参与函数外实参指向
     // 同一块内存。又由于函数外实参内存是动态分配的，因此函数内的形参可以使用free()函数进行内存释放，但一般不推荐这么做，因为函数内释放内存，
     // 会影响函数外实参的使用，可能使之成为野指针，那为什么这里可以用free()释放ptr呢，不会出现问题吗？
@@ -1367,79 +1553,54 @@ void *load_threads(void *ptr)
     //      不知道这段测试代码在VS中执行会怎样，还没经过测试，也不知道换用其他编译器（darknet的Makefile文件中，指定了编译器为gcc），darknet的编译会不会有什么问题？？
     //      关于free()，可以看看：http://blog.sina.com.cn/s/blog_615ec1630102uwle.html，文章最后有一个很有意思的比喻，但意思好像就和我这里说的有点不一样了（到底是不是编译器搞得鬼呢？？）。
     free(ptr);
-    // 每一个线程都会读入一个data，定义并分配args.thread个data的内存
-    data *buffers = calloc(args.threads, sizeof(data));
-    // 此处定义了多个线程，并为每个线程动态分配内存
-    pthread_t *threads = calloc(args.threads, sizeof(pthread_t));
+	// 每一个线程都会读入一个data，定义并分配args.thread个data的内存
+    data* buffers = (data*)xcalloc(args.threads, sizeof(data));
+    pthread_t* threads = (pthread_t*)xcalloc(args.threads, sizeof(pthread_t));
+	// 此处定义了多个线程，并为每个线程动态分配内存
     for(i = 0; i < args.threads; ++i){
-        // 此处就承应了上面的注释，args.d指针变量本身发生了改动，使得本函数的args.d与out不再指向同一块内存，
+		// 此处就承应了上面的注释，args.d指针变量本身发生了改动，使得本函数的args.d与out不再指向同一块内存，
         // 改为指向buffers指向的某一段内存，因为下面的load_data_in_thread()函数统一了结口，需要输入一个load_args类型参数，
         // 实际是想把图片数据读入到buffers[i]中，只能令args.d与buffers[i]指向同一块内存
         args.d = buffers + i;
-        // 下面这句很有意思，因为有多个线程，所有线程读入的总图片张数为total，需要将total均匀的分到各个线程上，
+		 // 下面这句很有意思，因为有多个线程，所有线程读入的总图片张数为total，需要将total均匀的分到各个线程上，
         // 但很可能会遇到total不能整除的args.threads的情况，比如total = 61, args.threads =8,显然不能做到
         // 完全均匀的分配，但又要保证读入图片的总张数一定等于total，用下面的语句刚好在尽量均匀的情况下，
         // 保证总和为total，比如61,那么8个线程各自读入的照片张数分别为：7, 8, 7, 8, 8, 7, 8, 8
         args.n = (i+1) * total/args.threads - i * total/args.threads;
-        // 开启线程，读入数据到args.d中（也就读入到buffers[i]中）
+		// 开启线程，读入数据到args.d中（也就读入到buffers[i]中）
         // load_data_in_thread()函数返回所开启的线程，并存储之前已经动态分配内存用来存储所有线程的threads中，
         // 方便下面使用pthread_join()函数控制相应线程
         threads[i] = load_data_in_thread(args);
     }
-
     for(i = 0; i < args.threads; ++i){
-        // 以阻塞的方式等待线程threads[i]结束：阻塞是指阻塞启动该子线程的母线程（此处应为主线程），
+		// 以阻塞的方式等待线程threads[i]结束：阻塞是指阻塞启动该子线程的母线程（此处应为主线程），
         // 是母线程处于阻塞状态，一直等待所有子线程执行完（读完所有数据）才会继续执行下面的语句
         // 关于多线程的使用，进行过代码测试，测试代码对应：darknet_test_pthread_join.c
         pthread_join(threads[i], 0);
     }
-    // 多个线程读入所有数据之后，分别存储到buffers[0],buffers[1]...中，接着使用concat_datas()函数将buffers中的数据全部合并成一个大数组得到out
+	// 多个线程读入所有数据之后，分别存储到buffers[0],buffers[1]...中，接着使用concat_datas()函数将buffers中的数据全部合并成一个大数组得到out
     *out = concat_datas(buffers, args.threads);
-    // 也就只有out的shallow敢置为0了，为什么呢？因为out是此次迭代读入的最终数据，该数据参与训练（用完）之后，当然可以深层释放了，而此前的都是中间变量，
+	 // 也就只有out的shallow敢置为0了，为什么呢？因为out是此次迭代读入的最终数据，该数据参与训练（用完）之后，当然可以深层释放了，而此前的都是中间变量，
     // 还处于读入数据阶段，万不可设置shallow=0
     out->shallow = 0;
-    // 释放buffers，buffers也是个中间变量，切记shallow设置为1,如果设置为0,那就连out中的数据也没了
+	// 释放buffers，buffers也是个中间变量，切记shallow设置为1,如果设置为0,那就连out中的数据也没了
     for(i = 0; i < args.threads; ++i){
         buffers[i].shallow = 1;
         free_data(buffers[i]);
     }
-    // 最终直接释放buffers,threads，注意buffers是一个存储data的一维数组，上面循环中的内存释放，实际是释放每一个data的部分内存
+	// 最终直接释放buffers,threads，注意buffers是一个存储data的一维数组，上面循环中的内存释放，实际是释放每一个data的部分内存
     // （这部分内存对data而言是非主要内存，不是存储读入数据的内存块，而是存储指向这些内存块的指针变量，可以释放的）
     free(buffers);
     free(threads);
     return 0;
 }
 
-void load_data_blocking(load_args args)
-{
-    struct load_args *ptr = calloc(1, sizeof(struct load_args));
-    *ptr = args;
-    load_thread(ptr);
-}
-
-/*
-** 开辟线程，读入一次迭代所需的所有图片数据：读入图片的张数为args.n = net.batch * net.subdivisions * ngpus，读入数据将存入args.d中（虽然args是按值传递的，但是args.d是指针变量，函数内改变args.d所指的内容在函数外也是有效的）
-** 输入： args    包含要读入图片数据的信息（读入多少张，开几个线程读入，读入图片最终的宽高，图片路径等等）
-** 返回： 创建的读取数据的线程id，以便于外界控制线程的进行
-** 说明： darknet作者在实现读入图片数据的时候，感觉有点绕来绕去的（也许此中有深意，只是我还未明白～），
-**       总的流程是：load_data(load_args args)->load_threads(load_args* ptr)->load_data_in_thread(load_args args)->load_thread(load_args* ptr),
-**       load_thread()函数中会选择具体的读入函数，比如load_data_detection()，要强调的是，所有这些函数，都会输入load_args类型参数，或者是其指针，
-**       而且很多函数开头就会新建一个args，并且深拷贝传入的args，而后返回新建的args，同时可能会随意改动甚至释放传入的args，这一整串流程只要记住一点：不管args在之后的函数中怎么变，
-**       其中的指针变量所指的内存块其实都是一样的（所以不管在哪个函数中，不要随意深层释放args.d的数据，除非是真正的用完了，而这里还处于数据读入阶段，所以决不能深层释放args.d）；
-**       而非指针变量，每个函数都不尽相同，但是没有关系，因为load_data()函数中传入的args是按值传递（不是指针）的，不管之后的函数怎么改动args的非指针变量，都不会影响load_data()函数外的值。
-** 碎碎念（TODO）：又是按值传递的哎，虽然上面说道因为按值传递使得更改args非指针变量不会影响外界的args，但是传入指针也可以做到啊，反正一进load_data()就深拷贝了args给ptr，而load_data()也没改动args的非指针变量。
-*/
-
 pthread_t load_data(load_args args)
 {
-    // 定义一个线程id
     pthread_t thread;
-    // 深拷贝args到ptr（虽说是深拷贝，但要注意args还有很多的指针变量，所有这些指针变量，ptr与args都指向同一内存块）
-    struct load_args *ptr = calloc(1, sizeof(struct load_args));
+    struct load_args* ptr = (load_args*)xcalloc(1, sizeof(struct load_args));
     *ptr = args;
-    // 创建相应线程，并绑定load_threads()函数到该线程上，第二参数是线程的属性，这里设置为0（即NULL）,第四个参数ptr就是load_threads()的输入参数
     if(pthread_create(&thread, 0, load_threads, ptr)) error("Thread creation failed");
-    // 返回创建的线程id
     return thread;
 }
 
@@ -1464,7 +1625,7 @@ data load_data_old(char **paths, int n, int m, char **labels, int k, int w, int 
     data d = {0};
     d.shallow = 0;
     d.X = load_image_paths(paths, n, w, h);
-    d.y = load_labels_paths(paths, n, labels, k, 0);
+    d.y = load_labels_paths(paths, n, labels, k, 0, 0);
     if(m) free(paths);
     return d;
 }
@@ -1476,7 +1637,7 @@ data load_data_old(char **paths, int n, int m, char **labels, int k, int w, int 
    d.indexes = calloc(n, sizeof(int));
    if(m) paths = get_random_paths_indexes(paths, n, m, d.indexes);
    d.shallow = 0;
-   d.X = load_image_augment_paths(paths, n, min, max, size, angle, aspect, hue, saturation, exposure);
+   d.X = load_image_augment_paths(paths, n, flip, min, max, size, angle, aspect, hue, saturation, exposure);
    d.y = load_labels_paths(paths, n, labels, k);
    if(m) free(paths);
    return d;
@@ -1491,17 +1652,17 @@ data load_data_super(char **paths, int n, int m, int w, int h, int scale)
 
     int i;
     d.X.rows = n;
-    d.X.vals = calloc(n, sizeof(float*));
+    d.X.vals = (float**)xcalloc(n, sizeof(float*));
     d.X.cols = w*h*3;
 
     d.y.rows = n;
-    d.y.vals = calloc(n, sizeof(float*));
+    d.y.vals = (float**)xcalloc(n, sizeof(float*));
     d.y.cols = w*scale * h*scale * 3;
 
     for(i = 0; i < n; ++i){
         image im = load_image_color(paths[i], 0, 0);
         image crop = random_crop_image(im, w*scale, h*scale);
-        int flip = rand()%2;
+        int flip = random_gen()%2;
         if (flip) flip_image(crop);
         image resize = resize_image(crop, w, h);
         d.X.vals[i] = resize.data;
@@ -1513,186 +1674,244 @@ data load_data_super(char **paths, int n, int m, int w, int h, int scale)
     return d;
 }
 
-data load_data_regression(char **paths, int n, int m, int k, int min, int max, int size, float angle, float aspect, float hue, float saturation, float exposure)
+data load_data_augment(char **paths, int n, int m, char **labels, int k, tree *hierarchy, int use_flip, int min, int max, int w, int h, float angle, float aspect, float hue, float saturation, float exposure, int use_mixup, int use_blur, int show_imgs, float label_smooth_eps, int dontuse_opencv)
 {
+    char **paths_stored = paths;
     if(m) paths = get_random_paths(paths, n, m);
     data d = {0};
     d.shallow = 0;
-    d.X = load_image_augment_paths(paths, n, min, max, size, angle, aspect, hue, saturation, exposure, 0);
-    d.y = load_regression_labels_paths(paths, n, k);
-    if(m) free(paths);
-    return d;
-}
+    d.X = load_image_augment_paths(paths, n, use_flip, min, max, w, h, angle, aspect, hue, saturation, exposure, dontuse_opencv);
+    d.y = load_labels_paths(paths, n, labels, k, hierarchy, label_smooth_eps);
 
-data select_data(data *orig, int *inds)
-{
-    data d = {0};
-    d.shallow = 1;
-    d.w = orig[0].w;
-    d.h = orig[0].h;
+    if (use_mixup && rand_int(0, 1)) {
+        char **paths_mix = get_random_paths(paths_stored, n, m);
+        data d2 = { 0 };
+        d2.shallow = 0;
+        d2.X = load_image_augment_paths(paths_mix, n, use_flip, min, max, w, h, angle, aspect, hue, saturation, exposure, dontuse_opencv);
+        d2.y = load_labels_paths(paths_mix, n, labels, k, hierarchy, label_smooth_eps);
+        free(paths_mix);
 
-    d.X.rows = orig[0].X.rows;
-    d.y.rows = orig[0].X.rows;
+        data d3 = { 0 };
+        d3.shallow = 0;
+        data d4 = { 0 };
+        d4.shallow = 0;
+        if (use_mixup >= 3) {
+            char **paths_mix3 = get_random_paths(paths_stored, n, m);
+            d3.X = load_image_augment_paths(paths_mix3, n, use_flip, min, max, w, h, angle, aspect, hue, saturation, exposure, dontuse_opencv);
+            d3.y = load_labels_paths(paths_mix3, n, labels, k, hierarchy, label_smooth_eps);
+            free(paths_mix3);
 
-    d.X.cols = orig[0].X.cols;
-    d.y.cols = orig[0].y.cols;
-
-    d.X.vals = calloc(orig[0].X.rows, sizeof(float *));
-    d.y.vals = calloc(orig[0].y.rows, sizeof(float *));
-    int i;
-    for(i = 0; i < d.X.rows; ++i){
-        d.X.vals[i] = orig[inds[i]].X.vals[i];
-        d.y.vals[i] = orig[inds[i]].y.vals[i];
-    }
-    return d;
-}
-
-data *tile_data(data orig, int divs, int size)
-{
-    data *ds = calloc(divs*divs, sizeof(data));
-    int i, j;
-#pragma omp parallel for
-    for(i = 0; i < divs*divs; ++i){
-        data d;
-        d.shallow = 0;
-        d.w = orig.w/divs * size;
-        d.h = orig.h/divs * size;
-        d.X.rows = orig.X.rows;
-        d.X.cols = d.w*d.h*3;
-        d.X.vals = calloc(d.X.rows, sizeof(float*));
-
-        d.y = copy_matrix(orig.y);
-#pragma omp parallel for
-        for(j = 0; j < orig.X.rows; ++j){
-            int x = (i%divs) * orig.w / divs - (d.w - orig.w/divs)/2;
-            int y = (i/divs) * orig.h / divs - (d.h - orig.h/divs)/2;
-            image im = float_to_image(orig.w, orig.h, 3, orig.X.vals[j]);
-            d.X.vals[j] = crop_image(im, x, y, d.w, d.h).data;
+            char **paths_mix4 = get_random_paths(paths_stored, n, m);
+            d4.X = load_image_augment_paths(paths_mix4, n, use_flip, min, max, w, h, angle, aspect, hue, saturation, exposure, dontuse_opencv);
+            d4.y = load_labels_paths(paths_mix4, n, labels, k, hierarchy, label_smooth_eps);
+            free(paths_mix4);
         }
-        ds[i] = d;
+
+
+        // mix
+        int i, j;
+        for (i = 0; i < d2.X.rows; ++i) {
+
+            int mixup = use_mixup;
+            if (use_mixup == 4) mixup = rand_int(2, 3); // alternate CutMix and Mosaic
+
+            // MixUp -----------------------------------
+            if (mixup == 1) {
+                // mix images
+                for (j = 0; j < d2.X.cols; ++j) {
+                    d.X.vals[i][j] = (d.X.vals[i][j] + d2.X.vals[i][j]) / 2.0f;
+                }
+
+                // mix labels
+                for (j = 0; j < d2.y.cols; ++j) {
+                    d.y.vals[i][j] = (d.y.vals[i][j] + d2.y.vals[i][j]) / 2.0f;
+                }
+            }
+            // CutMix -----------------------------------
+            else if (mixup == 2) {
+                const float min = 0.3;  // 0.3*0.3 = 9%
+                const float max = 0.8;  // 0.8*0.8 = 64%
+                const int cut_w = rand_int(w*min, w*max);
+                const int cut_h = rand_int(h*min, h*max);
+                const int cut_x = rand_int(0, w - cut_w - 1);
+                const int cut_y = rand_int(0, h - cut_h - 1);
+                const int left = cut_x;
+                const int right = cut_x + cut_w;
+                const int top = cut_y;
+                const int bot = cut_y + cut_h;
+
+                assert(cut_x >= 0 && cut_x <= w);
+                assert(cut_y >= 0 && cut_y <= h);
+                assert(cut_w >= 0 && cut_w <= w);
+                assert(cut_h >= 0 && cut_h <= h);
+
+                assert(right >= 0 && right <= w);
+                assert(bot >= 0 && bot <= h);
+
+                assert(top <= bot);
+                assert(left <= right);
+
+                const float alpha = (float)(cut_w*cut_h) / (float)(w*h);
+                const float beta = 1 - alpha;
+
+                int c, x, y;
+                for (c = 0; c < 3; ++c) {
+                    for (y = top; y < bot; ++y) {
+                        for (x = left; x < right; ++x) {
+                            int j = x + y*w + c*w*h;
+                            d.X.vals[i][j] = d2.X.vals[i][j];
+                        }
+                    }
+                }
+
+                //printf("\n alpha = %f, beta = %f \n", alpha, beta);
+                // mix labels
+                for (j = 0; j < d.y.cols; ++j) {
+                    d.y.vals[i][j] = d.y.vals[i][j] * beta + d2.y.vals[i][j] * alpha;
+                }
+            }
+            // Mosaic -----------------------------------
+            else if (mixup == 3)
+            {
+                const float min_offset = 0.2; // 20%
+                const int cut_x = rand_int(w*min_offset, w*(1 - min_offset));
+                const int cut_y = rand_int(h*min_offset, h*(1 - min_offset));
+
+                float s1 = (float)(cut_x * cut_y) / (w*h);
+                float s2 = (float)((w - cut_x) * cut_y) / (w*h);
+                float s3 = (float)(cut_x * (h - cut_y)) / (w*h);
+                float s4 = (float)((w - cut_x) * (h - cut_y)) / (w*h);
+
+                int c, x, y;
+                for (c = 0; c < 3; ++c) {
+                    for (y = 0; y < h; ++y) {
+                        for (x = 0; x < w; ++x) {
+                            int j = x + y*w + c*w*h;
+                            if (x < cut_x && y < cut_y) d.X.vals[i][j] = d.X.vals[i][j];
+                            if (x >= cut_x && y < cut_y) d.X.vals[i][j] = d2.X.vals[i][j];
+                            if (x < cut_x && y >= cut_y) d.X.vals[i][j] = d3.X.vals[i][j];
+                            if (x >= cut_x && y >= cut_y) d.X.vals[i][j] = d4.X.vals[i][j];
+                        }
+                    }
+                }
+
+                for (j = 0; j < d.y.cols; ++j) {
+                    const float max_s = 1;// max_val_cmp(s1, max_val_cmp(s2, max_val_cmp(s3, s4)));
+
+                    d.y.vals[i][j] = d.y.vals[i][j] * s1 / max_s + d2.y.vals[i][j] * s2 / max_s + d3.y.vals[i][j] * s3 / max_s + d4.y.vals[i][j] * s4 / max_s;
+                }
+            }
+        }
+
+        free_data(d2);
+
+        if (use_mixup >= 3) {
+            free_data(d3);
+            free_data(d4);
+        }
     }
-    return ds;
+
+#ifdef OPENCV
+    if (use_blur) {
+        int i;
+        for (i = 0; i < d.X.rows; ++i) {
+            if (random_gen() % 2) {
+                image im = make_empty_image(w, h, 3);
+                im.data = d.X.vals[i];
+                int ksize = use_blur;
+                if (use_blur == 1) ksize = 17;
+                image blurred = blur_image(im, ksize);
+                free_image(im);
+                d.X.vals[i] = blurred.data;
+                //if (i == 0) {
+                //    show_image(im, "Not blurred");
+                //    show_image(blurred, "blurred");
+                //    wait_until_press_key_cv();
+                //}
+            }
+        }
+    }
+#endif  // OPENCV
+
+    if (show_imgs) {
+        int i, j;
+        for (i = 0; i < d.X.rows; ++i) {
+            image im = make_empty_image(w, h, 3);
+            im.data = d.X.vals[i];
+            char buff[1000];
+            sprintf(buff, "aug_%d_%s_%d", i, basecfg((char*)paths[i]), random_gen());
+            save_image(im, buff);
+
+            char buff_string[1000];
+            sprintf(buff_string, "\n Classes: ");
+            for (j = 0; j < d.y.cols; ++j) {
+                if (d.y.vals[i][j] > 0) {
+                    char buff_tmp[100];
+                    sprintf(buff_tmp, " %d (%f), ", j, d.y.vals[i][j]);
+                    strcat(buff_string, buff_tmp);
+                }
+            }
+            printf("%s \n", buff_string);
+
+            if (show_imgs == 1) {
+                show_image(im, buff);
+                wait_until_press_key_cv();
+            }
+        }
+        printf("\nYou use flag -show_imgs, so will be saved aug_...jpg images. Click on window and press ESC button \n");
+    }
+
+    if (m) free(paths);
+
+    return d;
 }
 
-data resize_data(data orig, int w, int h)
+data load_data_tag(char **paths, int n, int m, int k, int use_flip, int min, int max, int w, int h, float angle, float aspect, float hue, float saturation, float exposure)
 {
+    if(m) paths = get_random_paths(paths, n, m);
     data d = {0};
-    d.shallow = 0;
     d.w = w;
     d.h = h;
-    int i;
-    d.X.rows = orig.X.rows;
-    d.X.cols = w*h*3;
-    d.X.vals = calloc(d.X.rows, sizeof(float*));
-
-    d.y = copy_matrix(orig.y);
-#pragma omp parallel for
-    for(i = 0; i < orig.X.rows; ++i){
-        image im = float_to_image(orig.w, orig.h, 3, orig.X.vals[i]);
-        d.X.vals[i] = resize_image(im, w, h).data;
-    }
-    return d;
-}
-
-data load_data_augment(char **paths, int n, int m, char **labels, int k, tree *hierarchy, int min, int max, int size, float angle, float aspect, float hue, float saturation, float exposure, int center)
-{
-    if(m) paths = get_random_paths(paths, n, m);
-    data d = {0};
     d.shallow = 0;
-    d.w=size;
-    d.h=size;
-    d.X = load_image_augment_paths(paths, n, min, max, size, angle, aspect, hue, saturation, exposure, center);
-    d.y = load_labels_paths(paths, n, labels, k, hierarchy);
-    if(m) free(paths);
-    return d;
-}
-
-data load_data_tag(char **paths, int n, int m, int k, int min, int max, int size, float angle, float aspect, float hue, float saturation, float exposure)
-{
-    if(m) paths = get_random_paths(paths, n, m);
-    data d = {0};
-    d.w = size;
-    d.h = size;
-    d.shallow = 0;
-    d.X = load_image_augment_paths(paths, n, min, max, size, angle, aspect, hue, saturation, exposure, 0);
+    d.X = load_image_augment_paths(paths, n, use_flip, min, max, w, h, angle, aspect, hue, saturation, exposure, 0);
     d.y = load_tags_paths(paths, n, k);
     if(m) free(paths);
     return d;
 }
-/*
-** 合并矩阵m1,m2至一个大矩阵并返回
-** 输入： m1    待合并的矩阵1
-**       m2    待合并的矩阵2
-** 返回： matrix类型，合并后的大矩阵
-*/
+
 matrix concat_matrix(matrix m1, matrix m2)
 {
     int i, count = 0;
-    // 新建返回的大矩阵
     matrix m;
-    // 大矩阵列数不变，行数是m1,m2之后（一行对应一张图片数据）
     m.cols = m1.cols;
     m.rows = m1.rows+m2.rows;
-    // 为vals的第一维动态分配内存（下面并没有为第二维动态分配内存，从下面的for循环可以看出，第二维采用浅拷贝方式）
-    m.vals = calloc(m1.rows + m2.rows, sizeof(float*));
+    m.vals = (float**)xcalloc(m1.rows + m2.rows, sizeof(float*));
     for(i = 0; i < m1.rows; ++i){
-        // 为vals的每一行赋值
-        // 注意m1.vals[i]是每一行的首地址，因此m1.vals[i]是个指针变量，也就是此处直接将每行的地址赋值给了待输出矩阵的每一行的指针变量（前拷贝），
-        // 所以m实际与m1共享了数据（指向了同一块内存）
         m.vals[count++] = m1.vals[i];
     }
-    // 紧接着将m2中的图片数据逐行拷贝给大矩阵m（浅拷贝）
     for(i = 0; i < m2.rows; ++i){
         m.vals[count++] = m2.vals[i];
     }
     return m;
 }
 
-/*
-** 合并某一块图片数据到大data中并返回
-** 输入： d1    待合并的data块
-**       d2    待合并的data块
-** 返回： data类型数据
-*/
 data concat_data(data d1, data d2)
 {
     data d = {0};
     d.shallow = 1;
-    // 合并图片数据至d.X中
     d.X = concat_matrix(d1.X, d2.X);
-    // 合并图片的标签数据至d.y中
     d.y = concat_matrix(d1.y, d2.y);
-    d.w = d1.w;
-    d.h = d1.h;
     return d;
 }
 
-/*
-** 合并读入的所有图片数据至一个data中：图片数据不是一起读入的，分了多个线程读入，全部存储在d中（d是一个元素类型为data的一维数组）
-** 输入： d    读入的所有图片数据，第i个线程读入的部分图片数据存储在d[i]中
-**       n    d的维数，也即数据分了多少块（使用多少个线程读入）
-** 返回： data类型，包含所有图片
-** 说明： 虽然返回的out是在函数内新建的，但实际上，out都只是浅拷贝了这些碎块的图片数据，也即与这些碎块共享数据，
-**       因此，无论是哪个变量，其数据都不能释放（即data.shallow只能设置为1,不能深层释放数据的内存）
-*/
 data concat_datas(data *d, int n)
 {
     int i;
     data out = {0};
     for(i = 0; i < n; ++i){
-        // i = 0时，因为out = {0},表明默认初始化其中所有的元素为0值，对于指针变量而言，那就是空指针，
-        // free()函数可以接受一个空指针，此时free()函数将无作为，但不会出错；当i != 1时，out等于上一次循环得到的new，
-        // 在concat_data()函数中，会置其shallow元素值为1,也即进行浅层释放，为什么进行浅层释放呢？
-        // 整个的concat_datas函数在合并矩阵，在合并每一个小矩阵时，小矩阵的数据并没有进行深拷贝（深拷贝是指内容拷贝），
-        // 而是直接将小矩阵每一行的指针变量赋值给了大矩阵的对应行的指针变量（浅拷贝）（可以回看data.c文件中的concat_matrix()函数for循环中的赋值操作，
-        // m1.vals[i]是指向二维数组每一行开头的指针变量，也即复制的是指针变量本身，而不是指针变量所指的值，这就是浅拷贝），
-        // 所以小矩阵out与得到的新的大矩阵实际会共享数据，因此，下面只能释放out.X.vals及out.y.vals用于存储每一行指针变量的堆内存，
-        // 而不能内释放用于存储真实数据的堆内存，也即只能进行浅层释放，不能进行深层释放。
-        data new = concat_data(d[i], out);
+        data newdata = concat_data(d[i], out);
         free_data(out);
-        // 置out等于新得到的大矩阵new，此时out.X.vals以及out.y.vals存储的指向每一行数据的指针变量包括
-        // 目前为止得到的整个大矩阵的所有行
-        out = new;
+        out = newdata;
     }
     return out;
 }
@@ -1729,12 +1948,13 @@ data load_cifar10_data(char *filename)
     for(i = 0; i < 10000; ++i){
         unsigned char bytes[3073];
         fread(bytes, 1, 3073, fp);
-        int class = bytes[0];
-        y.vals[i][class] = 1;
+        int class_id = bytes[0];
+        y.vals[i][class_id] = 1;
         for(j = 0; j < X.cols; ++j){
             X.vals[i][j] = (double)bytes[j+1];
         }
     }
+    //translate_data_rows(d, -128);
     scale_data_rows(d, 1./255);
     //normalize_data_rows(d);
     fclose(fp);
@@ -1745,36 +1965,19 @@ void get_random_batch(data d, int n, float *X, float *y)
 {
     int j;
     for(j = 0; j < n; ++j){
-        int index = rand()%d.X.rows;
+        int index = random_gen()%d.X.rows;
         memcpy(X+j*d.X.cols, d.X.vals[index], d.X.cols*sizeof(float));
         memcpy(y+j*d.y.cols, d.y.vals[index], d.y.cols*sizeof(float));
     }
 }
-/*
-** 从输入d中深拷贝n张图片的数据与标签信息至X与y中：将d.X.vals以及d.y.vals（如有必要）逐行深拷贝至X,y中
-** 输入： d    读入的图片数据，按行存入其中（一张图片对应一行，每一行又按行存储每张图片）
-**       n    从d中深拷贝n张图片的数据与标签信息到X与y中
-**       offset    相对d首地址的偏移，表示从d中哪张图片开始拷贝（从此往后拷n张图片）
-**       X    d.X.vals目标存储变量
-**       y    d.y.vals目标存储变量
-** 注意：举例说明，在network.c中的train_network()中，调用了本函数，其中输入n=net.batch（关于net.batch这个参数，可以参考network.h中的注释），
-**      而d中实际包含了的图片张数为：net.batch*net.subdivision（可以参考detector.c中的train_detector(),你可能注意到这里没有乘以ngpu，
-**      是因为train_network()函数对应处理ngpu=1的情况，如果有多个gpu，那么会首先调用train_networks()函数，在其之中会调用get_data_part()将数据平分至每个gpu上，
-**      而后再调用train_network()，总之最后train_work()的输入d中只包含net.batch*net.subdivision张图片），可知本函数只是获取其中一个小batch图片，事实上，
-**      从train_network()函数中也可以看出，每次训练一个真实的batch的图片（所谓真实的batch，是指网络配置文件中指定的一个batch中所含的图片张数，详细参考network.h中的注释），
-**      又分了d.X.rows/batch次完成，d.X.rows/batch实际就是net.subdivision的值（可以参考data.c中load_data_detection()）。
-*/
+
 void get_next_batch(data d, int n, int offset, float *X, float *y)
 {
     int j;
-    // 下面逐行将输入d中的数据深拷贝至X中
     for(j = 0; j < n; ++j){
         int index = offset + j;
-        // memcpy(void* destination,const void *source,size_t num);函数用来复制块内存，常用于数组间的复制赋值（指针所指内容复制，不是指针复制）
-        // 此处将d.X中的数据d.X.vals中的某一行深拷贝至输入X中
         memcpy(X+j*d.X.cols, d.X.vals[index], d.X.cols*sizeof(float));
-        // 如果y也分配了内存（也有这个需求），那么也将d.y中的某一行拷贝至y中
-        if(y) memcpy(y+j*d.y.cols, d.y.vals[index], d.y.cols*sizeof(float));
+        memcpy(y+j*d.y.cols, d.y.vals[index], d.y.cols*sizeof(float));
     }
 }
 
@@ -1809,8 +2012,8 @@ data load_all_cifar10()
         for(i = 0; i < 10000; ++i){
             unsigned char bytes[3073];
             fread(bytes, 1, 3073, fp);
-            int class = bytes[0];
-            y.vals[i+b*10000][class] = 1;
+            int class_id = bytes[0];
+            y.vals[i+b*10000][class_id] = 1;
             for(j = 0; j < X.cols; ++j){
                 X.vals[i+b*10000][j] = (double)bytes[j+1];
             }
@@ -1818,6 +2021,7 @@ data load_all_cifar10()
         fclose(fp);
     }
     //normalize_data_rows(d);
+    //translate_data_rows(d, -128);
     scale_data_rows(d, 1./255);
     smooth_data(d);
     return d;
@@ -1874,7 +2078,7 @@ void randomize_data(data d)
 {
     int i;
     for(i = d.X.rows-1; i > 0; --i){
-        int index = rand()%i;
+        int index = random_gen()%i;
         float *swap = d.X.vals[index];
         d.X.vals[index] = d.X.vals[i];
         d.X.vals[i] = swap;
@@ -1899,19 +2103,6 @@ void translate_data_rows(data d, float s)
     for(i = 0; i < d.X.rows; ++i){
         translate_array(d.X.vals[i], d.X.cols, s);
     }
-}
-
-data copy_data(data d)
-{
-    data c = {0};
-    c.w = d.w;
-    c.h = d.h;
-    c.shallow = 0;
-    c.num_boxes = d.num_boxes;
-    c.boxes = d.boxes;
-    c.X = copy_matrix(d.X);
-    c.y = copy_matrix(d.y);
-    return c;
 }
 
 void normalize_data_rows(data d)
@@ -1946,12 +2137,12 @@ data get_random_data(data d, int num)
     r.X.cols = d.X.cols;
     r.y.cols = d.y.cols;
 
-    r.X.vals = calloc(num, sizeof(float *));
-    r.y.vals = calloc(num, sizeof(float *));
+    r.X.vals = (float**)xcalloc(num, sizeof(float*));
+    r.y.vals = (float**)xcalloc(num, sizeof(float*));
 
     int i;
     for(i = 0; i < num; ++i){
-        int index = rand()%d.X.rows;
+        int index = random_gen()%d.X.rows;
         r.X.vals[i] = d.X.vals[index];
         r.y.vals[i] = d.y.vals[index];
     }
@@ -1960,12 +2151,12 @@ data get_random_data(data d, int num)
 
 data *split_data(data d, int part, int total)
 {
-    data *split = calloc(2, sizeof(data));
+    data* split = (data*)xcalloc(2, sizeof(data));
     int i;
     int start = part*d.X.rows/total;
     int end = (part+1)*d.X.rows/total;
-    data train;
-    data test;
+    data train ={0};
+    data test ={0};
     train.shallow = test.shallow = 1;
 
     test.X.rows = test.y.rows = end-start;
@@ -1973,10 +2164,10 @@ data *split_data(data d, int part, int total)
     train.X.cols = test.X.cols = d.X.cols;
     train.y.cols = test.y.cols = d.y.cols;
 
-    train.X.vals = calloc(train.X.rows, sizeof(float*));
-    test.X.vals = calloc(test.X.rows, sizeof(float*));
-    train.y.vals = calloc(train.y.rows, sizeof(float*));
-    test.y.vals = calloc(test.y.rows, sizeof(float*));
+    train.X.vals = (float**)xcalloc(train.X.rows, sizeof(float*));
+    test.X.vals = (float**)xcalloc(test.X.rows, sizeof(float*));
+    train.y.vals = (float**)xcalloc(train.y.rows, sizeof(float*));
+    test.y.vals = (float**)xcalloc(test.y.rows, sizeof(float*));
 
     for(i = 0; i < start; ++i){
         train.X.vals[i] = d.X.vals[i];
@@ -1994,4 +2185,3 @@ data *split_data(data d, int part, int total)
     split[1] = test;
     return split;
 }
-

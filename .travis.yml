@@ -1,0 +1,240 @@
+language: cpp
+cache:
+  timeout: 1000
+  directories:
+    - $HOME/vcpkg
+
+matrix:
+  include:
+
+    - os: osx
+      compiler: gcc
+      name: macOS - gcc (llvm backend)
+      env:
+        - additional_defines=""
+        - MATRIX_EVAL=""
+
+    - os: osx
+      compiler: gcc
+      name: macOS - gcc (llvm backend) - opencv@2
+      env:
+        - OpenCV_DIR="/usr/local/opt/opencv@2/"
+        - additional_defines="-DOpenCV_DIR=${OpenCV_DIR}"
+        - MATRIX_EVAL="brew install opencv@2"
+
+    - os: osx
+      compiler: gcc
+      name: macOS - gcc (llvm backend) - opencv@3
+      env:
+        - OpenCV_DIR="/usr/local/opt/opencv@3/"
+        - additional_defines="-DOpenCV_DIR=${OpenCV_DIR}"
+        - MATRIX_EVAL="brew install opencv@3"
+
+    - os: osx
+      compiler: gcc
+      name: macOS - gcc (llvm backend) - opencv(latest)
+      env:
+        - additional_defines=""
+        - MATRIX_EVAL="brew install opencv"
+
+    - os: osx
+      compiler: clang
+      name: macOS - clang
+      env:
+        - additional_defines=""
+        - MATRIX_EVAL=""
+
+    - os: osx
+      compiler: clang
+      name: macOS - clang - C++ mode
+      env:
+        - additional_defines="-DBUILD_AS_CPP:BOOL=TRUE"
+        - MATRIX_EVAL=""
+
+    - os: osx
+      compiler: clang
+      name: macOS - clang - opencv@2
+      env:
+        - OpenCV_DIR="/usr/local/opt/opencv@2/"
+        - additional_defines="-DOpenCV_DIR=${OpenCV_DIR}"
+        - MATRIX_EVAL="brew install opencv@2"
+
+    - os: osx
+      compiler: clang
+      name: macOS - clang - opencv@3
+      env:
+        - OpenCV_DIR="/usr/local/opt/opencv@3/"
+        - additional_defines="-DOpenCV_DIR=${OpenCV_DIR}"
+        - MATRIX_EVAL="brew install opencv@3"
+
+    - os: osx
+      compiler: clang
+      name: macOS - clang - opencv(latest)
+      env:
+        - additional_defines=""
+        - MATRIX_EVAL="brew install opencv"
+
+    - os: osx
+      name: macOS - clang - vcpkg
+      osx_image: xcode10.1
+      env:
+        - additional_defines="-DBUILD_SHARED_LIBS=OFF"
+        - MATRIX_EVAL="brew install yasm && unset CC && unset CXX"
+        - USE_VCPKG=true
+        - VCPKG_DEFINES="-DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake"
+
+    - os: linux
+      compiler: clang
+      dist: bionic
+      name: ubuntu 18.04 - clang
+      env:
+        - additional_defines=""
+        - MATRIX_EVAL=""
+
+    - os: linux
+      compiler: gcc
+      dist: bionic
+      name: ubuntu 18.04 - gcc
+      env:
+        - additional_defines=""
+        - MATRIX_EVAL=""
+
+    - os: linux
+      compiler: gcc
+      dist: bionic
+      name: ubuntu 18.04 - g++
+      env:
+        - additional_defines="-DBUILD_AS_CPP:BOOL=TRUE"
+        - MATRIX_EVAL=""
+
+    - os: linux
+      compiler: gcc
+      dist: bionic
+      name: ubuntu 18.04 - gcc - vcpkg
+      addons:
+        apt:
+          update: true
+          packages:
+            - yasm
+      env:
+        - additional_defines="-DBUILD_SHARED_LIBS=OFF"
+        - USE_VCPKG=true
+        - VCPKG_DEFINES="-DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        - MATRIX_EVAL=""
+
+    - os: linux
+      compiler: clang
+      dist: bionic
+      name: ubuntu 18.04 - clang - opencv@3
+      addons:
+        apt:
+          update: true
+          packages:
+            - libopencv-dev
+      env:
+        - additional_defines=""
+        - MATRIX_EVAL=""
+
+    - os: linux
+      compiler: gcc
+      dist: bionic
+      name: ubuntu 18.04 - gcc - opencv@3
+      addons:
+        apt:
+          update: true
+          packages:
+            - libopencv-dev
+      env:
+        - additional_defines=""
+        - MATRIX_EVAL=""
+
+    - os: linux
+      compiler: clang
+      dist: bionic
+      name: ubuntu 18.04 - clang - CUDA 10 - opencv@3
+      addons:
+        apt:
+          update: true
+          packages:
+            - libopencv-dev
+      env:
+        - additional_defines=""
+        - CUDACXX=/usr/local/cuda-10.0/bin/nvcc
+        - CUDA_PATH=/usr/local/cuda-10.0
+        - CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-10.0
+        - LD_LIBRARY_PATH="/usr/local/cuda-10.0/lib64:/usr/local/cuda-10.0/lib64/stubs:${LD_LIBRARY_PATH}"
+        - MATRIX_EVAL="wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1404/x86_64/cuda-repo-ubuntu1404_10.0.130-1_amd64.deb && sudo apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1404/x86_64/7fa2af80.pub && sudo dpkg -i cuda-repo-ubuntu1404_10.0.130-1_amd64.deb && wget http://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1404/x86_64/nvidia-machine-learning-repo-ubuntu1404_4.0-2_amd64.deb && sudo dpkg -i nvidia-machine-learning-repo-ubuntu1404_4.0-2_amd64.deb && sudo apt-get -y update && sudo apt-get install -y --no-install-recommends cuda-compiler-10-0 cuda-libraries-dev-10-0 cuda-driver-dev-10-0 cuda-cudart-dev-10-0 cuda-cublas-dev-10-0 cuda-curand-dev-10-0 && sudo apt-get install -y --no-install-recommends libcudnn7-dev && sudo ln -s /usr/local/cuda-10.0/lib64/stubs/libcuda.so /usr/local/cuda-10.0/lib64/stubs/libcuda.so.1"
+
+    - os: linux
+      compiler: gcc
+      dist: bionic
+      name: ubuntu 18.04 - gcc - CUDA 10 - opencv@3
+      addons:
+        apt:
+          update: true
+          packages:
+            - libopencv-dev
+      env:
+        - additional_defines=""
+        - CUDACXX=/usr/local/cuda-10.0/bin/nvcc
+        - CUDA_PATH=/usr/local/cuda-10.0
+        - CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-10.0
+        - LD_LIBRARY_PATH="/usr/local/cuda-10.0/lib64:/usr/local/cuda-10.0/lib64/stubs:${LD_LIBRARY_PATH}"
+        - MATRIX_EVAL="wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1404/x86_64/cuda-repo-ubuntu1404_10.0.130-1_amd64.deb && sudo apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1404/x86_64/7fa2af80.pub && sudo dpkg -i cuda-repo-ubuntu1404_10.0.130-1_amd64.deb && wget http://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1404/x86_64/nvidia-machine-learning-repo-ubuntu1404_4.0-2_amd64.deb && sudo dpkg -i nvidia-machine-learning-repo-ubuntu1404_4.0-2_amd64.deb && sudo apt-get -y update && sudo apt-get install -y --no-install-recommends cuda-compiler-10-0 cuda-libraries-dev-10-0 cuda-driver-dev-10-0 cuda-cudart-dev-10-0 cuda-cublas-dev-10-0 cuda-curand-dev-10-0 && sudo apt-get install -y --no-install-recommends libcudnn7-dev && sudo ln -s /usr/local/cuda-10.0/lib64/stubs/libcuda.so /usr/local/cuda-10.0/lib64/stubs/libcuda.so.1"
+
+    - os: linux
+      compiler: gcc
+      dist: bionic
+      name: ubuntu 18.04 - gcc - CUDA 10 - vcpkg
+      addons:
+        apt:
+          update: true
+          packages:
+            - yasm
+      env:
+        - additional_defines="-DBUILD_SHARED_LIBS=OFF"
+        - USE_VCPKG=true
+        - VCPKG_DEFINES="-DCMAKE_TOOLCHAIN_FILE=$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        - CUDACXX=/usr/local/cuda-10.0/bin/nvcc
+        - CUDA_PATH=/usr/local/cuda-10.0
+        - CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-10.0
+        - LD_LIBRARY_PATH="/usr/local/cuda-10.0/lib64:/usr/local/cuda-10.0/lib64/stubs:${LD_LIBRARY_PATH}"
+        - MATRIX_EVAL="wget http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1404/x86_64/cuda-repo-ubuntu1404_10.0.130-1_amd64.deb && sudo apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1404/x86_64/7fa2af80.pub && sudo dpkg -i cuda-repo-ubuntu1404_10.0.130-1_amd64.deb && wget http://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1404/x86_64/nvidia-machine-learning-repo-ubuntu1404_4.0-2_amd64.deb && sudo dpkg -i nvidia-machine-learning-repo-ubuntu1404_4.0-2_amd64.deb && sudo apt-get -y update && sudo apt-get install -y --no-install-recommends cuda-compiler-10-0 cuda-libraries-dev-10-0 cuda-driver-dev-10-0 cuda-cudart-dev-10-0 cuda-cublas-dev-10-0 cuda-curand-dev-10-0 && sudo apt-get install -y --no-install-recommends libcudnn7-dev && sudo ln -s /usr/local/cuda-10.0/lib64/stubs/libcuda.so /usr/local/cuda-10.0/lib64/stubs/libcuda.so.1"
+
+#  allow_failures:
+#    - name: macOS - vcpkg
+#    - name: ubuntu 18.04 - gcc - vcpkg
+#    - name: ubuntu 18.04 - gcc - CUDA 10 - vcpkg
+
+before_install:
+  - travis_retry eval "${MATRIX_EVAL}"
+
+install:
+  # CMake upgrade on Linux
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]] ; then wget --no-check-certificate https://github.com/Kitware/CMake/releases/download/v3.13.4/cmake-3.13.4-Linux-x86_64.tar.gz ; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]] ; then tar -xzf cmake-3.13.4-Linux-x86_64.tar.gz ; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]] ; then export PATH=$PWD/cmake-3.13.4-Linux-x86_64/bin:$PATH ; fi
+  - pushd $HOME
+  - if [ -d "$HOME/vcpkg/.git" ] ; then echo vcpkg cached ; else rm -rf vcpkg ; git clone https://github.com/Microsoft/vcpkg ; fi
+  - cd vcpkg
+  - git checkout .
+  - git pull
+  - if [ "${USE_VCPKG}" = true ] ; then ./bootstrap-vcpkg.sh ; fi
+  - if [ "${USE_VCPKG}" = true ] ; then echo "set(VCPKG_BUILD_TYPE release)" >> triplets/x64-osx.cmake ; fi
+  - if [ "${USE_VCPKG}" = true ] ; then echo "set(VCPKG_BUILD_TYPE release)" >> triplets/x64-linux.cmake ; fi
+  - if [ "${USE_VCPKG}" = true ] ; then travis_wait ./vcpkg install stb pthreads --recurse; fi
+  - if [ "${USE_VCPKG}" = true ] ; then travis_wait 45 ./vcpkg install ffmpeg --recurse; fi
+  #- if [ "${USE_VCPKG}" = true ] && [[ ! -z "${CUDACXX}" ]] ; then travis_wait 45 ./vcpkg install opencv[ffmpeg,cuda] --recurse; fi
+  #- if [ "${USE_VCPKG}" = true ] && [[ -z "${CUDACXX}" ]] ; then travis_wait 45 ./vcpkg install opencv[ffmpeg] --recurse; fi
+  - if [ "${USE_VCPKG}" = true ] ; then travis_wait 45 ./vcpkg install opencv[ffmpeg] --recurse; fi
+  - if [ "${USE_VCPKG}" = true ] ; then rm -rf buildtrees; fi
+  - popd
+
+before_script:
+  - mkdir build_release
+  - cd build_release
+  - cmake .. -DCMAKE_BUILD_TYPE="Release" ${VCPKG_DEFINES} ${additional_defines}
+  - cd ..
+
+script:
+  - cd build_release && cmake --build . --target install -- -j8 && cd ..

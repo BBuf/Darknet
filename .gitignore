@@ -1,52 +1,57 @@
-# Prerequisites
-*.d
-
-# Object files
 *.o
-*.ko
-*.obj
-*.elf
-
-# Linker output
-*.ilk
-*.map
-*.exp
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
 *.a
-*.la
-*.lo
-
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
-
-# Executables
-*.exe
+*.dSYM
+*.csv
 *.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+*.png
+*.so
+*.exe
+*.dll
+*.lib
+*.dylib
+mnist/
+data/
+caffe/
+grasp/
+images/
+opencv/
+convnet/
+decaf/
+submission/
+cfg/
+build/darknet/*
+build_*/
+!build/darknet/YoloWrapper.cs
+.fuse*
+*.weights
+build/*.cmake
+build/*.ninja
+build/*.txt
+build/*.json
+build/CMakeFiles/
+build/detect_cuda_compute_capabilities.cu
+build/.ninja_deps
+build/.ninja_log
+build/Makefile
 
-# Debug files
-*.dSYM/
-*.su
-*.idb
-*.pdb
+# OS Generated #
+.DS_Store*
+ehthumbs.db
+Icon?
+Thumbs.db
+*.swp
 
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
+# IDE generated #
+.vs/
+.vscode/
+
+# Managed by CMake
+src/version.h
+
+# Build artifacts
+lib/
+share/
+include/darknet/
+uselib
+uselib_track
+darknet

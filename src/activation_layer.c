@@ -1,6 +1,6 @@
 #include "activation_layer.h"
 #include "utils.h"
-#include "cuda.h"
+#include "dark_cuda.h"
 #include "blas.h"
 #include "gemm.h"
 
@@ -11,15 +11,15 @@
 
 layer make_activation_layer(int batch, int inputs, ACTIVATION activation)
 {
-    layer l = {0};
+    layer l = { (LAYER_TYPE)0 };
     l.type = ACTIVE;
 
     l.inputs = inputs;
     l.outputs = inputs;
     l.batch=batch;
 
-    l.output = calloc(batch*inputs, sizeof(float*));
-    l.delta = calloc(batch*inputs, sizeof(float*));
+    l.output = (float*)xcalloc(batch * inputs, sizeof(float));
+    l.delta = (float*)xcalloc(batch * inputs, sizeof(float));
 
     l.forward = forward_activation_layer;
     l.backward = backward_activation_layer;
@@ -35,29 +35,29 @@ layer make_activation_layer(int batch, int inputs, ACTIVATION activation)
     return l;
 }
 
-void forward_activation_layer(layer l, network net)
+void forward_activation_layer(layer l, network_state state)
 {
-    copy_cpu(l.outputs*l.batch, net.input, 1, l.output, 1);
+    copy_cpu(l.outputs*l.batch, state.input, 1, l.output, 1);
     activate_array(l.output, l.outputs*l.batch, l.activation);
 }
 
-void backward_activation_layer(layer l, network net)
+void backward_activation_layer(layer l, network_state state)
 {
     gradient_array(l.output, l.outputs*l.batch, l.activation, l.delta);
-    copy_cpu(l.outputs*l.batch, l.delta, 1, net.delta, 1);
+    copy_cpu(l.outputs*l.batch, l.delta, 1, state.delta, 1);
 }
 
 #ifdef GPU
 
-void forward_activation_layer_gpu(layer l, network net)
+void forward_activation_layer_gpu(layer l, network_state state)
 {
-    copy_gpu(l.outputs*l.batch, net.input_gpu, 1, l.output_gpu, 1);
-    activate_array_gpu(l.output_gpu, l.outputs*l.batch, l.activation);
+    copy_ongpu(l.outputs*l.batch, state.input, 1, l.output_gpu, 1);
+    activate_array_ongpu(l.output_gpu, l.outputs*l.batch, l.activation);
 }
 
-void backward_activation_layer_gpu(layer l, network net)
+void backward_activation_layer_gpu(layer l, network_state state)
 {
-    gradient_array_gpu(l.output_gpu, l.outputs*l.batch, l.activation, l.delta_gpu);
-    copy_gpu(l.outputs*l.batch, l.delta_gpu, 1, net.delta_gpu, 1);
+    gradient_array_ongpu(l.output_gpu, l.outputs*l.batch, l.activation, l.delta_gpu);
+    copy_ongpu(l.outputs*l.batch, l.delta_gpu, 1, state.delta, 1);
 }
 #endif
