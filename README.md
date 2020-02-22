@@ -1,7 +1,9 @@
 
 > 前言: 自从Joseph Redmon提出了yolov3后，其darknet仓库已经获得了16k的star，足以说明darknet的流行。该作者最新一次更新也是一年前了，没有继续维护。不过自来自俄国的大神AlexeyAB在不断地更新darknet, 不仅添加了darknet在window下的适配，而且实现了多种SOTA目标检测算法。AlexeyAB也在库中提供了一份详细的建议，从编译、配置、涉及网络到测量指标等，一应俱全。通过阅读和理解AlexeyAB的建议，可以为我们带来很多启发。本文是来自翻译AlexeyAB的darknet中的README，并在翻译的过程中加入我们的一些经验。
 
-@[toc]
+
+
+[TOC]
 
 下图是CSPNet中统计的目前的State of the Art的目标检测模型。其中从csresnext50-panet-spp-optimal模型是CSPNet中提出来的，可以结合AlexeyAB版本的Darknet就可以实现。
 
