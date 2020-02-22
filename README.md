@@ -5,6 +5,7 @@
 
 [TOC]
 
+
 下图是CSPNet中统计的目前的State of the Art的目标检测模型。其中从csresnext50-panet-spp-optimal模型是CSPNet中提出来的，可以结合AlexeyAB版本的Darknet就可以实现。
 
 ![](https://img-blog.csdnimg.cn/20200109223251119.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
