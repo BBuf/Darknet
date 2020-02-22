@@ -1,5 +1,5 @@
 
-> 前言: 自从Joseph Redmon提出了yolov3后，其darknet仓库已经获得了16k的star，足以说明darknet的流行。该作者最新一次更新也是一年前了，没有继续维护。不过自来自俄国的大神AlexeyAB在不断地更新darknet, 不仅添加了darknet在window下的适配，而且实现了多种SOTA目标检测算法。AlexeyAB也在库中提供了一份详细的建议，从编译、配置、涉及网络到测量指标等，一应俱全。通过阅读和理解AlexeyAB的建议，可以为我们带来很多启发。本文是来自翻译AlexeyAB的darknet中的README，并在翻译的过程中加入我们的一些经验。
+> 前言: 自从Joseph Redmon提出了yolov3后，其darknet仓库已经获得了16k的star，足以说明darknet的流行。该作者最新一次更新也是一年前了，没有继续维护。不过自来自俄国的大神AlexeyAB在不断地更新darknet, 不仅添加了darknet在window下的适配，而且实现了多种SOTA目标检测算法。AlexeyAB也在库中提供了一份详细的建议，从编译、配置、涉及网络到测量指标等，一应俱全。通过阅读和理解AlexeyAB的建议，可以为我们带来很多启发。这里是翻译了AlexeyAB的Darknet中的README。然后在文末是GiantPandaCV公众号做的多期源码详细解析，在这个工程里你能看到最全的DarkNet代码注释，以及你会明白DarkNet是如何从你标注的数据获得最终的目标框的，你会学到DarkNet的数据结构组织方式，网络以及每个Layer的前向传播和反向传播，以及YOLOV1，V2，V3，GaussianYOLO，TrideNet，CSPNet, PRN, EfficientNet等最SOTA的模型，最后你还能学到GIOU，DIOU，CIOU， Focal Loss等最经典和先进的Loss。公众号的源码解析见最后。
 
 
 
@@ -609,29 +609,25 @@ public:
 
 
 
+# 公众号源码解析
+
+- [【AlexeyAB DarkNet框架解析】一，框架总览](https://mp.weixin.qq.com/s/RruZSl49vv5B0eRif-p9HQ)
+- [【AlexeyAB DarkNet框架解析】二，数据结构解析](https://mp.weixin.qq.com/s/xcQ1enYJDdb_UdHkJqnQHQ)
+- [【AlexeyAB DarkNet框架解析】三，加载数据进行训练](https://mp.weixin.qq.com/s/Rrq3DGlcMi-TkBoIkbHh6g)
+- [【AlexeyAB DarkNet框架解析】四，网络的前向传播和反向传播介绍以及layer的详细解析](https://mp.weixin.qq.com/s/BvhXIE65ksllh4HkXCWhzg)
+- [【AlexeyAB DarkNet框架解析】五，卷积层的前向传播解析](https://mp.weixin.qq.com/s/kutGO0D7W7sfxAUTL7mtUg)
+- [【AlexeyAB DarkNet框架解析】六，卷积层的反向传播解析](https://mp.weixin.qq.com/s/NviQoG0SjMogqSm0FwoQjA)
+- [【AlexeyAB DarkNet框架解析】七，YOLOV1损失函数代码详解(detection_layer.c)](https://mp.weixin.qq.com/s/vzkKM0GczTNrUpFgNvTvjQ)
+- [【AlexeyAB DarkNet框架解析】八，YOLOV2损失函数代码详解(region_layer.c)](https://mp.weixin.qq.com/s/YvcYImkZXUafAI6lR4wATw)
+- [【AlexeyAB DarkNet框架解析】九，YOLOV3损失函数代码详解(yolo_layer.c)](https://mp.weixin.qq.com/s/gbRkSWbCtOBxWGziE_XgGw)
+
+
+
+
 
 “GiantPandaCV”是由两位对计算机视觉心怀热情的95后创建的，专注于深度学习基础路线，不盲目追求热点，按照科学的计算机视觉学习路线踏实而坚定地走下去。
 
+![扫码关注](https://img-blog.csdnimg.cn/20200222131102215.png)
 
+​																	**欢迎您的加入，愿与君共同成长。**
 
-目前公众号有两位作者，分别是BBuf和pprp，分别负责不同方向的论文阅读和写作，同时会分享在我们入门、深入计算机视觉的过程，想法，以及走过的弯路。
-
-
-
-欢迎对计算机视觉感兴趣或者遇到一些麻烦的朋友们添加BBuf或者pprp的微信，我们将你带入一个热心分享、共同解决困难的集体！
-
-
-
-欢迎添加BBuf的微信：
-
-![img](https://img-blog.csdnimg.cn/20200114085250864.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
-
-欢迎添加pprp的微信:
-
-![img](https://img-blog.csdnimg.cn/20200114085239220.jpg?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
-
-
-
-
-
-**欢迎您的加入，愿与君共同成长。**
