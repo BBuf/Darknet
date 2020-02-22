@@ -25,7 +25,7 @@ region_layer make_region_layer(int batch, int w, int h, int n, int classes, int 
 	// 这些变量都可以参考darknet.h中的注释
     l.n = n; //一个cell中预测多少个box
     l.batch = batch; //一个batch中包含的图片数
-    l.h = h; //输入图片的宽度
+    l.h = h; //输入图片的高度
     l.w = w; //输入图片的宽度
     l.classes = classes; //网络需要识别的物体类数
     l.coords = coords; //定位一个物体所需的参数个数（一般值为4,包括矩形中心点坐标x,y以及长宽w,h）

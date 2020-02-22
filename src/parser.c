@@ -1382,13 +1382,13 @@ network parse_network_cfg_custom(char *filename, int batch, int time_steps)
         ++count;
 		// 构建每一层之后，如果之后还有层，则更新params.h,params.w,params.c及params.inputs为上一层相应的输出参数
         if(n){
-            if (l.antialiasing) {
+            if (l.antialiasing) { //antialiasing 抗锯齿标志，如果为真强行设置所有的步长为1
                 params.h = l.input_layer->out_h;
                 params.w = l.input_layer->out_w;
                 params.c = l.input_layer->out_c;
                 params.inputs = l.input_layer->outputs;
             }
-            else {
+            else { 
                 params.h = l.out_h;
                 params.w = l.out_w;
                 params.c = l.out_c;
