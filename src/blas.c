@@ -248,14 +248,36 @@ void shortcut_cpu(int batch, int w1, int h1, int c1, float *add, int w2, int h2,
     }
 }
 
+
+/*
+** 计算输入数据x的平均值，输出的mean是一个矢量，比如如果x是多张三通道的图片，那么mean的维度就为通道3
+** 由于每次训练输入的都是一个batch的图片，因此最终会输出batch张三通道的图片，mean中的第一个元素就是第
+** 一个通道上全部batch张输出特征图所有元素的平均值，本函数的用处之一就是batch normalization的第一步了
+** x: 包含所有数据，比如l.output，其包含的元素个数为l.batch*l.outputs
+** batch: 一个batch中包含的图片张数，即l.batch
+** filters: 该层神经网络的滤波器个数，也即该层网络输出图片的通道数（比如对卷积网络来说，就是核的个数了）
+** spatial: 该层神经网络每张输出特征图的尺寸，也即等于l.out_w*l.out_h
+** mean: 求得的平均值，维度为filters，也即每个滤波器对应有一个均值（每个滤波器会处理所有图片）
+** x的内存排布？此处还是结合batchnorm_layer.c中的forward_batch_norm_layer()函数的调用来解释，其中x为l.output，其包含的元素个数为l
+** 有l.batch行，每行有l.out_c*l.out_w*l.out_h个元素，每一行又可以分成l.out_c行，l.out_w*l.out_h列，
+** 那么l.mean中的每一个元素，是某一个通道上所有batch的输出的平均值
+** （比如卷积层，有3个核，那么输出通道有3个，每张输入图片都会输出3张特征图，可以理解每张输出图片是3通道的，
+** 若每次输入batch=64张图片，那么将会输出64张3通道的图片，而mean中的每个元素就是某个通道上所有64张图片
+** 所有元素的平均值，比如第1个通道上，所有64张图片像素平均值）
+*/
 void mean_cpu(float *x, int batch, int filters, int spatial, float *mean)
 {
+    // scale即是均值中的分母项
     float scale = 1./(batch * spatial);
     int i,j,k;
+    // 外循环次数为filters，也即mean的维度，每次循环将得到一个平均值
     for(i = 0; i < filters; ++i){
         mean[i] = 0;
+        // 中间循环次数为batch，也即叠加每张输入图片对应的某一通道上的输出
         for(j = 0; j < batch; ++j){
+            // 内层循环即叠加一张输出特征图的所有像素值
             for(k = 0; k < spatial; ++k){
+                // 计算偏移
                 int index = j*filters*spatial + i*spatial + k;
                 mean[i] += x[index];
             }
@@ -264,6 +286,34 @@ void mean_cpu(float *x, int batch, int filters, int spatial, float *mean)
     }
 }
 
+/*
+** 计算输入x中每个元素的方差
+** 本函数的主要用处应该就是batch normalization的第二步了
+** x: 包含所有数据，比如l.output，其包含的元素个数为l.batch*l.outputs
+** batch: 一个batch中包含的图片张数，即l.batch
+** filters: 该层神经网络的滤波器个数，也即是该网络层输出图片的通道数
+** spatial: 该层神经网络每张特征图的尺寸，也即等于l.out_w*l.out_h
+** mean: 求得的平均值，维度为filters，也即每个滤波器对应有一个均值（每个滤波器会处理所有图片）
+*/
+void variance_cpu(float *x, float *mean, int batch, int filters, int spatial, float *variance)
+{
+    // 这里计算方差分母要减去1的原因是无偏估计，可以看：https://www.zhihu.com/question/20983193
+    // 事实上，在统计学中，往往采用的方差计算公式都会让分母减1,这时因为所有数据的方差是基于均值这个固定点来计算的，
+    // 对于有n个数据的样本，在均值固定的情况下，其采样自由度为n-1（只要n-1个数据固定，第n个可以由均值推出）
+    float scale = 1./(batch * spatial - 1);
+    int i,j,k;
+    for(i = 0; i < filters; ++i){
+        variance[i] = 0;
+        for(j = 0; j < batch; ++j){
+            for(k = 0; k < spatial; ++k){
+                int index = j*filters*spatial + i*spatial + k;
+                // 每个元素减去均值求平方
+                variance[i] += pow((x[index] - mean[i]), 2);
+            }
+        }
+        variance[i] *= scale;
+    }
+}
 void variance_cpu(float *x, float *mean, int batch, int filters, int spatial, float *variance)
 {
     float scale = 1./(batch * spatial - 1);
@@ -311,6 +361,15 @@ void pow_cpu(int N, float ALPHA, float *X, int INCX, float *Y, int INCY)
     for(i = 0; i < N; ++i) Y[i*INCY] = pow(X[i*INCX], ALPHA);
 }
 
+/*
+** axpy 是线性代数中的一种基本操作(仿射变换)完成y= alpha*x + y操作，其中x,y为矢量，alpha为实数系数，
+** 请看: https://www.jianshu.com/p/e3f386771c51
+** N: X中包含的有效元素个数
+** ALPHA: 系数alpha
+** X: 参与运算的矢量X
+** INCX: 步长(倍数步长)，即x中凡是INCX倍数编号的参与运算
+** Y: 参与运算的矢量，也相当于是输出
+*/
 void axpy_cpu(int N, float ALPHA, float *X, int INCX, float *Y, int INCY)
 {
     int i;
@@ -329,6 +388,12 @@ void scal_add_cpu(int N, float ALPHA, float BETA, float *X, int INCX)
     for (i = 0; i < N; ++i) X[i*INCX] = X[i*INCX] * ALPHA + BETA;
 }
 
+/*
+** 初始化X数组所有元素的值为ALPHA
+** N: X中包含的有效元素个数
+** X: 待初始化的float数组指针
+** INCX: 步长(倍数步长)，即X中凡是INCX的倍数编号进行初始化赋值操作
+*/
 void fill_cpu(int N, float ALPHA, float *X, int INCX)
 {
     int i;
@@ -370,6 +435,12 @@ void inter_cpu(int NX, float *X, int NY, float *Y, int B, float *OUT)
     }
 }
 
+/*
+** 将输入X中的数据赋值到Y中(值复制，并不是指针复制，即之后X和Y之间再无关联，也即浅拷贝)
+** N: X中包含的有效元素个数
+** X: 待初始化的float数组指针
+** INCX: 步长(倍数步长)，即X中凡是INCX的倍数编号进行初始化赋值操作
+*/
 void copy_cpu(int N, float *X, int INCX, float *Y, int INCY)
 {
     int i;
@@ -431,6 +502,17 @@ void logistic_x_ent_cpu(int n, float *pred, float *truth, float *delta, float *e
     }
 }
 
+/*
+** 计算预测数组与真实标签数组中每对元素的l2范数值，或者说是squared error
+** 注意此函数，并没有求和，没有将所有误差加起来，而是对网络输出的每个元素计算误差的平方值
+** n: 输出元素个数，也即是pred中的元素个数，也是truth中的元素个数
+** pred: 网络最终的输出值，或者说网络的预测值，其中输出元素个数为n（也即最后一层网络神经元个数为n）
+** truth: 真实标签值，其中元素个数为n（也即最后一层网络神经元个数为n）
+** delta: 相当于本函数的输出，为网络的敏感度图（一般为cost_layer.c的敏感度图）
+** error: 相当于本函数的输出，包含每个元素的squared eroor
+** 这个函数一般被cost_layer.c调用，用于计算cost_layer每个输出的均方误差，除此之外，还有一个重要的操作，
+** 就是计算网络最后一层的敏感度图，在darknet中，最后一层比较多的情况是cost_l
+*/
 void l2_cpu(int n, float *pred, float *truth, float *delta, float *error)
 {
     int i;
@@ -449,30 +531,64 @@ float dot_cpu(int N, float *X, int INCX, float *Y, int INCY)
     return dot;
 }
 
+
+/*
+** input: 一组输入图片数据（含义见下面softmax_cpu()注释，下同）
+** n: 一组输入数据含有的元素个数n = l.inputs/l.groups
+** temp: 温度参数,关于softmax的温度参数，可以搜索一下softmax with temperature，应该会有很多的
+** stride: 步长
+** output  这一组输入图片数据对应的输出（也即l.output中与这一组输入对应的某一部分）
+** 本函数实现的就是标准的softmax函数处理，唯一有点变化的就是在做指数运算之前，将每个输入元素
+** 减去了该组输入元素中的最大值，以增加数值稳定性，关于此，可以参考博客：http://freemind.pluskid.org/machine-learning/softmax-vs-softmax-loss-numerical-stability/，
+** 这篇博客写的不错，博客中还提到了softmax-loss，此处没有实现（此处实现的也即博客中提到的softmax函数，将softmax-loss分开实现了）。
+*/
 void softmax(float *input, int n, float temp, float *output, int stride)
 {
     int i;
     float sum = 0;
+	// 赋初始最大值为float中的最小值-FLT_MAX
     float largest = -FLT_MAX;
     for(i = 0; i < n; ++i){
         if(input[i*stride] > largest) largest = input[i*stride];
     }
+	// 上面说了为啥要减去最大值
     for(i = 0; i < n; ++i){
         float e = exp(input[i*stride]/temp - largest/temp);
         sum += e;
         output[i*stride] = e;
     }
+	// 最后一步：归一化转换为概率（就是softmax函数的原型～），最后的输出结果保存在output中
     for(i = 0; i < n; ++i){
         output[i*stride] /= sum;
     }
 }
 
-
+/*
+** 对输入Input进行softmax处理得到output
+** input: softmax层所有的输入数据，即是net.input（上一层的输出）
+** n: 一组数据中含有的元素个数n = l.inputs / l.groups
+** batch: 一个batch中所含有的图片张数,net.batch
+** batch_offset    一张输入图片含有的元素个数，即值等于l.inputs
+** （所以叫做batch_offset，目的是要借助该参数在input中整张整张照片移位）
+** groups: 一张输入图片的元素被分成了几组，值为l.groups（这个参数由配置文件指定，如果未指定，则默认为1）
+** group_offset: 等于n/net.groups,组偏移（在每张输入图片元素中整组整组偏移）
+** stride  跨度，这个参数类似于axpy_cpu()函数中的INCX参数，一定注意不同于卷积层中的l.stride，这个参数是指按照stride间隔从每组输入
+** 数据中抽取元素，即会抽取所有索引为stride倍数的输入元素，而其他的输入元素，实际没有用到；stride=1时，显然，相当于没有这个参数，
+** 所有输入数据都用到了（这个参数在softmax_layer层中，相当于没用，因为在forward_softmax_layer()中，调用该函数时，stride已经
+** 被写死为1,并不能改，不知道还有没有其他地方使用了这个参数）
+** temp: softmax的温度参数l.temperature，关于softmax的温度参数，可以搜索一下softmax with temperature，应该会有很多的
+** output: 经softmax处理之后得到的输出l.output（即概率），与input具有相同的元素个数（见make_softmax_layer()），其实由此也可知，
+ * stride的值必然为1,不然output的元素个数肯定少于input的元素个数（所以对于softmax来说，感觉设置stride是没有必要的，有点自相矛盾的意思）
+** 这里的groups似乎是有歧义的，因为卷积里面有groups即组卷积参数，但是这里的意思是一张图片被分成了几份，似乎是AlexNet为了显存够用那个思路
+** 但我去查看了AlexNet的cfg，这里groups也是设置为1的。所以个人认为直接将softmax出现的groups忘掉，然后记住只有分组卷积groups有用即可。
+*/
 void softmax_cpu(float *input, int n, int batch, int batch_offset, int groups, int group_offset, int stride, float temp, float *output)
 {
     int g, b;
+	// 遍历batch中的每张图片
     for(b = 0; b < batch; ++b){
         for(g = 0; g < groups; ++g){
+			// 每张图片又按组遍历：一组一组遍历
             softmax(input + b*batch_offset + g*group_offset, n, temp, output + b*batch_offset + g*group_offset, stride);
         }
     }
