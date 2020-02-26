@@ -621,6 +621,8 @@ public:
 - [【AlexeyAB DarkNet框架解析】七，YOLOV1损失函数代码详解(detection_layer.c)](https://mp.weixin.qq.com/s/vzkKM0GczTNrUpFgNvTvjQ)
 - [【AlexeyAB DarkNet框架解析】八，YOLOV2损失函数代码详解(region_layer.c)](https://mp.weixin.qq.com/s/YvcYImkZXUafAI6lR4wATw)
 - [【AlexeyAB DarkNet框架解析】九，YOLOV3损失函数代码详解(yolo_layer.c)](https://mp.weixin.qq.com/s/gbRkSWbCtOBxWGziE_XgGw)
+- [【AlexeyAB DarkNet框架解析】十，池化层代码详解(maxpool_layer.c)](https://mp.weixin.qq.com/s/T8xZBwv8JoO90eBTbhYl5w)
+- [【AlexeyAB DarkNet框架解析】十一，BN层代码详解(batchnorm_layer.c)](https://mp.weixin.qq.com/s/AjVr6_YvLwR4PfrEM89H1Q)
 
 
 

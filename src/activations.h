@@ -11,14 +11,19 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+// 获得激活函数对应的字符串描述
 ACTIVATION get_activation(char *s);
 
 char *get_activation_string(ACTIVATION a);
+//根据不同的激活函数类型，调用不同的激活函数处理输入元素
 float activate(float x, ACTIVATION a);
+//根据不同的激活函数求取对输入的梯度
 float gradient(float x, ACTIVATION a);
+// 计算激活函数对加权输入的导数, 并乘以delta，得到当前层最终的delta(误差项)
 void gradient_array(const float *x, const int n, const ACTIVATION a, float *delta);
 void gradient_array_swish(const float *x, const int n, const float * sigmoid, float * delta);
 void gradient_array_mish(const int n, const float * activation_input, float * delta);
+// 用激活函数处理输入x中的每一个元素
 void activate_array(float *x, const int n, const ACTIVATION a);
 void activate_array_swish(float *x, const int n, float * output_sigmoid, float * output);
 void activate_array_mish(float *x, const int n, float * activation_input, float * output);
@@ -40,6 +45,16 @@ void gradient_array_normalize_channels_softmax_ongpu(float *output_gpu, int n, i
 
 #endif
 
+/*
+ * 内联函数可以加快调用的速度，但是调用多次的话，会使执行文件变大，这样会降低速度。
+ * static 修饰的内联函数，一般情况下不会产生函数本身的代码，而是全部嵌入在被调用的地方。
+ * 如果不加 static，则表示该函数有可能被其他编译单元所调用，所以一定会产生函数本身的代码；
+ *
+ * gcc的 static inline相对于static函数来说只是在调用时建议编译器进行内联展开；
+ * gcc不会特意为 static inline 函数生成独立的汇编码，除非出现了必须生成不可的情况（如通过函数指针和递归调用）；
+ * gcc 的static inline 函数仅能作用于文件范围内。
+ */
+ 
 static inline float stair_activate(float x)
 {
     int n = floorf(x);
