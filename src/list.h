@@ -3,9 +3,9 @@
 
 // 链表上的节点
 typedef struct node{
-    void *val;
-    struct node *next;
-    struct node *prev;
+    void *val; //前节点的内容是一个void类型的空指针
+    struct node *next; //指向当前节点的下一节点
+    struct node *prev; //指向当前节点的上一节点
 } node;
 
 //双向链表
@@ -19,6 +19,8 @@ typedef struct list{
 extern "C" {
 #endif
 list *make_list();
+list *make_list(); // 初始化链表
+// 按值查找，注意这里的值是 void类型空指针, list.c未定义，
 int list_find(list *l, void *val);
 
 void list_insert(list *, void *);

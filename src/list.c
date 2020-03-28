@@ -4,6 +4,7 @@
 #include "utils.h"
 #include "option_list.h"
 
+//初始化链表
 list *make_list()
 {
     list* l = (list*)xmalloc(sizeof(list));
@@ -27,16 +28,22 @@ void transfer_node(list *s, list *d, node *n)
 }
 */
 
+//链表的删除操作，删除尾指针所指节点，即最后一个节点
 void *list_pop(list *l){
+	// 如果链表为空
     if(!l->back) return 0;
+	// node *b 指向最后一个节点
     node *b = l->back;
     void *val = b->val;
+	// 更新尾指针，尾指针指向b的前一节点，即倒数第二节点。
     l->back = b->prev;
-    if(l->back) l->back->next = 0;
-    free(b);
-    --l->size;
+	// 如果倒数第二节点存在
+    if(l->back) l->back->next = 0; //尾指针next置为null
+    // 释放最后一个节点的存储空间
+	free(b);
+    --l->size; // 链表长度 -1
 
-    return val;
+    return val;// 返回被删除节点保存的值
 }
 
 /*
@@ -71,16 +78,17 @@ void list_insert(list *l, void *val)
     l->back = newnode;
     ++l->size;
 }
-
+// 释放链表节点的存储空间，从节点n开始释放，一直释放到最后一个节点。
 void free_node(node *n)
 {
     node *next;
     while(n) {
-        next = n->next;
-        free(n);
-        n = next;
-    }
+        next = n->next; // 获取下一节点地址
+        free(n); // 释放当前节点存储空间
+        n = next; //更新n，n指向下一节点
+    } 
 }
+
 
 void free_list_val(list *l)
 {
@@ -93,12 +101,14 @@ void free_list_val(list *l)
     }
 }
 
+// 释放整个链表l的存储空间
 void free_list(list *l)
 {
     free_node(l->front);
     free(l);
 }
 
+// 对链表所有节点的值【节点中值为void 类型指针】 的存储空间释放
 void free_list_contents(list *l)
 {
     node *n = l->front;
@@ -119,14 +129,18 @@ void free_list_contents_kvp(list *l)
     }
 }
 
+// 二维指针，这里的操作是将链表l中所有节点的值进行保存，
+// 因为每个节点里保存的值是 void类型的指针，故指针的指针，即二维指针
 void **list_to_array(list *l)
 {
+	//　分配存储空间，长度l-size, 每个空间大小为一个void类型指针
     void** a = (void**)xcalloc(l->size, sizeof(void*));
     int count = 0;
-    node *n = l->front;
+    node *n = l->front; // 工作指针n指向头节点
     while(n){
+		// 将工作指针n指向节点的值保存到a中
         a[count++] = n->val;
-        n = n->next;
+        n = n->next; // 更新工作指针
     }
     return a;
 }
