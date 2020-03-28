@@ -9,9 +9,12 @@ typedef layer dropout_layer;
 #ifdef __cplusplus
 extern "C" {
 #endif
+// 构建一个dropout层
 dropout_layer make_dropout_layer(int batch, int inputs, float probability, int dropblock, float dropblock_size_rel, int dropblock_size_abs, int w, int h, int c);
 
+// dropout前向传播
 void forward_dropout_layer(dropout_layer l, network_state state);
+// dropout反向传播
 void backward_dropout_layer(dropout_layer l, network_state state);
 void resize_dropout_layer(dropout_layer *l, int inputs);
 
